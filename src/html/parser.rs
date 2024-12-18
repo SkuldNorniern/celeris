@@ -45,7 +45,7 @@ impl Parser {
                     debug!(target: "html", "Found end tag: </{}> (stack size: {})", 
                         name, ancestor_stack.len());
                     if !is_void_element(&name) {
-                        if let Some(mut parent) = ancestor_stack.pop() {
+                        if let Some(parent) = ancestor_stack.pop() {
                             let completed_node = std::mem::replace(current_node, parent);
                             current_node.add_child(completed_node);
                         }
@@ -78,9 +78,21 @@ impl Parser {
 }
 
 fn is_void_element(tag_name: &str) -> bool {
-    matches!(tag_name.to_lowercase().as_str(),
-        "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input" |
-        "link" | "meta" | "param" | "source" | "track" | "wbr"
+    matches!(
+        tag_name.to_lowercase().as_str(),
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }
-

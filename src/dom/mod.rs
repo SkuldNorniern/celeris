@@ -65,13 +65,14 @@ impl Node {
     pub fn get_attribute(&self, name: &str) -> Option<&str> {
         match &self.node_type {
             NodeType::Element { attributes, .. } => {
-                let attr = attributes.iter()
+                let attr = attributes
+                    .iter()
                     .find(|attr| attr.name == name)
                     .map(|attr| attr.value.as_str());
                 debug!(target: "dom", "Getting attribute '{}': {:?}", name, attr);
                 attr
             }
-            _ => None
+            _ => None,
         }
     }
 
@@ -82,15 +83,19 @@ impl Node {
                 debug!(target: "dom", "Checking if node is <{}>: {}", tag_name, is_match);
                 is_match
             }
-            _ => false
+            _ => false,
         }
     }
 
     pub fn debug_print(&self, depth: usize) {
         let indent = "  ".repeat(depth);
         match &self.node_type {
-            NodeType::Element { tag_name, attributes } => {
-                let attrs: Vec<String> = attributes.iter()
+            NodeType::Element {
+                tag_name,
+                attributes,
+            } => {
+                let attrs: Vec<String> = attributes
+                    .iter()
                     .map(|attr| format!("{}=\"{}\"", attr.name, attr.value))
                     .collect();
                 let attrs_str = if attrs.is_empty() {

@@ -24,10 +24,13 @@ impl Uri {
 
         let remainder = parts[1];
         let (authority, path) = remainder.split_once('/').unwrap_or((remainder, ""));
-        
+
         // Handle port in authority
         let (host, port) = if let Some((h, p)) = authority.split_once(':') {
-            (h.to_string(), Some(p.parse().map_err(|_| NetworkError::InvalidUri)?))
+            (
+                h.to_string(),
+                Some(p.parse().map_err(|_| NetworkError::InvalidUri)?),
+            )
         } else {
             (authority.to_string(), None)
         };

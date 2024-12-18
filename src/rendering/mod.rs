@@ -74,9 +74,9 @@ impl LayoutEngine {
     }
 
     fn compute_layout(&self, styled_node: &StyledNode) -> DisplayList {
-        let mut display_list = DisplayList::new();
+        
         // Implement layout computation
-        display_list
+        DisplayList::new()
     }
 }
 
