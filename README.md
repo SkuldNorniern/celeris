@@ -4,14 +4,14 @@ Celeris is a high-performance, ground-up browser engine written in Rust, designe
 
 ## Features
 
-- **Pure Rust Implementation**: Built from the ground up in Rust for maximum safety and performance
-- **Modern Architecture**: Clean separation of concerns with modular design
-- **HTML5 Parser**: Custom HTML parser with robust error handling
-- **CSS3 Support**: Advanced CSS parsing and styling engine
-- **Network Stack**: Custom networking layer with HTTP/HTTPS support
-- **Rendering Engine**: Flexible rendering pipeline with both headless and windowed modes
+- **Pure Rust Implementation**: (In development) Built from the ground up in Rust for maximum safety and performance
+- **Modern Architecture**: (In development) Clean separation of concerns with modular design
+- **HTML5 Parser**: (In development) Custom HTML parser with robust error handling
+- **CSS3 Support**: (In development) Advanced CSS parsing and styling engine
+- **Network Stack**: (In development) Custom networking layer with HTTP/HTTPS support
+- **Rendering Engine**: (In development) Flexible rendering pipeline with both headless and windowed modes
 - **JavaScript Engine**: (In development) Custom JS engine for web interactivity
-- **Developer Tools**: Built-in debugging and logging capabilities
+- **Developer Tools**: (In development) Built-in debugging and logging capabilities
 
 ## Project Structure
 
