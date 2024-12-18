@@ -12,21 +12,30 @@ pub struct Uri {
 
 impl Uri {
     pub fn parse(uri: &str) -> Result<Self, NetworkError> {
-        // Basic URL parsing - you'll want to expand this
         let parts: Vec<&str> = uri.split("://").collect();
         if parts.len() != 2 {
             return Err(NetworkError::InvalidUri);
         }
 
         let scheme = parts[0].to_string();
-        let remainder = parts[1];
+        if scheme != "http" && scheme != "https" {
+            return Err(NetworkError::InvalidUri);
+        }
 
-        let (host, path) = remainder.split_once('/').unwrap_or((remainder, ""));
+        let remainder = parts[1];
+        let (authority, path) = remainder.split_once('/').unwrap_or((remainder, ""));
+        
+        // Handle port in authority
+        let (host, port) = if let Some((h, p)) = authority.split_once(':') {
+            (h.to_string(), Some(p.parse().map_err(|_| NetworkError::InvalidUri)?))
+        } else {
+            (authority.to_string(), None)
+        };
 
         Ok(Self {
             scheme,
-            host: host.to_string(),
-            port: None,
+            host,
+            port,
             path: format!("/{}", path),
             query: None,
         })
@@ -42,6 +51,10 @@ impl Uri {
 
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    pub fn scheme(&self) -> &str {
+        &self.scheme
     }
 }
 

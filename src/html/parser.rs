@@ -1,52 +1,86 @@
 use super::tokenizer::{Token, Tokenizer};
 use crate::dom::{DomTree, Node, NodeType};
+use log::{debug, info};
 
 pub struct Parser {
     tokenizer: Tokenizer,
-    current_node: Option<Node>,
 }
 
 impl Parser {
     pub fn new(html: String) -> Self {
+        debug!(target: "html", "Creating new HTML parser");
         Self {
             tokenizer: Tokenizer::new(html),
-            current_node: None,
         }
     }
 
     pub fn parse(&mut self) -> DomTree {
+        info!(target: "html", "Starting HTML parsing");
         let mut dom = DomTree::new();
-        let mut node_stack: Vec<Node> = Vec::new();
+        let mut root = Node::new(NodeType::Element {
+            tag_name: String::from("html"),
+            attributes: Vec::new(),
+        });
+        let current_node = &mut root;
+        let mut ancestor_stack = Vec::new();
 
         while let Some(token) = self.tokenizer.next_token() {
+            debug!(target: "html", "Processing token: {:?}", token);
             match token {
                 Token::StartTag { name, attributes } => {
-                    let node = Node::new(NodeType::Element {
-                        tag_name: name,
+                    debug!(target: "html", "Found start tag: <{}>", name);
+                    let new_node = Node::new(NodeType::Element {
+                        tag_name: name.clone(),
                         attributes,
                     });
 
-                    if let Some(parent) = node_stack.last_mut() {
-                        let node_clone = node.clone();
-                        parent.add_child(node_clone);
+                    if !is_void_element(&name) {
+                        let temp = std::mem::replace(current_node, new_node);
+                        ancestor_stack.push(temp);
                     } else {
-                        dom.set_root(node.clone());
+                        current_node.add_child(new_node);
                     }
-
-                    node_stack.push(node);
                 }
-                Token::EndTag { name: _ } => {
-                    node_stack.pop();
+                Token::EndTag { name } => {
+                    debug!(target: "html", "Found end tag: </{}> (stack size: {})", 
+                        name, ancestor_stack.len());
+                    if !is_void_element(&name) {
+                        if let Some(mut parent) = ancestor_stack.pop() {
+                            let completed_node = std::mem::replace(current_node, parent);
+                            current_node.add_child(completed_node);
+                        }
+                    }
                 }
                 Token::Text(content) => {
-                    if let Some(parent) = node_stack.last_mut() {
-                        parent.add_child(Node::new(NodeType::Text(content)));
+                    if !content.trim().is_empty() {
+                        debug!(target: "html", "Found text node: {}", 
+                            content.chars().take(30).collect::<String>());
+                        let text_node = Node::new(NodeType::Text(content));
+                        current_node.add_child(text_node);
                     }
                 }
-                _ => {} // Handle other token types
+                Token::Comment(content) => {
+                    debug!(target: "html", "Found comment: {}", 
+                        content.chars().take(30).collect::<String>());
+                    let comment_node = Node::new(NodeType::Comment(content));
+                    current_node.add_child(comment_node);
+                }
+                Token::Doctype(_) => {
+                    // Just ignore doctype for now
+                }
             }
         }
 
+        dom.set_root(root);
+        info!(target: "html", "HTML parsing complete");
         dom
     }
 }
+
+fn is_void_element(tag_name: &str) -> bool {
+    matches!(tag_name.to_lowercase().as_str(),
+        "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input" |
+        "link" | "meta" | "param" | "source" | "track" | "wbr"
+    )
+}
+

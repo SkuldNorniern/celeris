@@ -40,9 +40,11 @@ impl HttpClient {
 
         let request = http::Request::new()
             .method(http::Method::GET)
-            .uri(uri.to_string())
-            .header("Host", connection.host())
+            .uri(uri.path().to_string())
+            .header("Host", uri.host())
             .header("Connection", "close")
+            .header("User-Agent", "Celeris/0.1")
+            .header("Accept", "*/*")
             .build()?;
 
         connection.send_request(&request).await

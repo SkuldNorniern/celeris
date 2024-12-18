@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+log = "0.4.22"
+rustls = "0.23.20"
 tokio = { version = "1.40", features = ["full", "macros", "rt-multi-thread"] }
+tokio-rustls = "0.26.1"
+webpki-roots = "0.26.7"
 
 [lints.clippy]
 unwrap_used = "deny"
