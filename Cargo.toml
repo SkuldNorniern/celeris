@@ -1,0 +1,15 @@
+[package]
+name = "celeris"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.40", features = ["full", "macros", "rt-multi-thread"] }
+
+[lints.clippy]
+unwrap_used = "deny"
+cognitive_complexity = "deny"
+
+[profile.release]
+lto = 'fat'
+opt-level = 3
