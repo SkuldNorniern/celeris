@@ -22,8 +22,8 @@ impl Log for SimpleLogger {
             };
 
             println!(
-                "[{timestamp}][{level}][{target}][{location}] {message}",
-                timestamp = timestamp,
+                "[{level}][{target}][{location}] {message}",
+                // timestamp = timestamp,
                 level = record.level(),
                 target = record.target(),
                 location = location,
