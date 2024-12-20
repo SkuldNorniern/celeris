@@ -43,6 +43,35 @@ pub enum Node {
     
     // Program root
     Program(Vec<Node>),
+    
+    // Add new expression types
+    MemberExpr {
+        object: Box<Node>,
+        property: Box<Node>,
+        computed: bool,  // true for obj[prop], false for obj.prop
+    },
+    LogicalOr {
+        left: Box<Node>,
+        right: Box<Node>,
+    },
+    
+    // Add assignment expression
+    AssignmentExpr {
+        left: Box<Node>,
+        right: Box<Node>,
+    },
+    
+    // Add array literal
+    ArrayLiteral(Vec<Node>),
+    
+    // Add new expression
+    NewExpr {
+        constructor: Box<Node>,
+        arguments: Vec<Node>,
+    },
+    
+    // Add object literal
+    ObjectLiteral(Vec<(String, Box<Node>)>),
 }
 
 #[derive(Debug, Clone)]
