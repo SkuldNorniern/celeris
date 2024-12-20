@@ -4,6 +4,7 @@ mod html;
 pub mod logger;
 mod networking;
 mod rendering;
+mod javascript;
 
 use log::{debug, info};
 use std::error::Error;
@@ -12,6 +13,7 @@ pub struct Browser {
     config: BrowserConfig,
     networking: networking::NetworkManager,
     renderer: rendering::Renderer,
+    js_engine: javascript::JavaScriptEngine,
 }
 
 #[derive(Clone)]
@@ -27,6 +29,7 @@ impl Browser {
             config,
             networking: networking::NetworkManager::new()?,
             renderer: rendering::Renderer::new(config_clone.headless)?,
+            js_engine: javascript::JavaScriptEngine::new(),
         })
     }
 
@@ -68,6 +71,9 @@ impl Browser {
         let dom = parser.parse();
 
         let root = dom.root().ok_or("No root node found")?;
+
+        // Add JavaScript processing
+        self.process_javascript(&root).await?;
 
         // Add debug information about the root node
         println!("\n[+] DOM Root Node Info:");
@@ -113,6 +119,7 @@ impl Browser {
             dom::NodeType::Element {
                 tag_name,
                 attributes,
+                ..
             } => {
                 debug!(target: "browser", "Processing element: {} with {} children", 
                     tag_name, node.children().len());
@@ -183,6 +190,7 @@ impl Browser {
             dom::NodeType::Element {
                 tag_name,
                 attributes,
+                ..
             } => {
                 println!("{}Element: <{}>", indent_str, tag_name);
                 if !attributes.is_empty() {
@@ -204,5 +212,65 @@ impl Browser {
                 println!("{}Comment: \"{}\"", indent_str, comment);
             }
         }
+    }
+
+    async fn process_javascript(&mut self, root: &dom::Node) -> Result<(), Box<dyn Error>> {
+        // Find and execute inline scripts
+        self.execute_inline_scripts(root)?;
+        
+        // Find and execute external scripts
+        self.execute_external_scripts(root).await?;
+        
+        Ok(())
+    }
+
+    fn execute_inline_scripts(&mut self, node: &dom::Node) -> Result<(), Box<dyn Error>> {
+        match node.node_type() {
+            dom::NodeType::Element { tag_name, attributes, .. } => {
+                if tag_name == "script" {
+                    // Check if it's an inline script (no src attribute)
+                    if !attributes.iter().any(|attr| attr.name == "src") {
+                        // Get the script content from children
+                        if let Some(text_node) = node.children().first() {
+                            if let dom::NodeType::Text(script) = text_node.node_type() {
+                                debug!(target: "browser", "Executing inline JavaScript");
+                                self.js_engine.evaluate(script)?;
+                            }
+                        }
+                    }
+                }
+
+                // Recursively process children
+                for child in node.children() {
+                    self.execute_inline_scripts(child)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn execute_external_scripts(&mut self, node: &dom::Node) -> Result<(), Box<dyn Error>> {
+        match node.node_type() {
+            dom::NodeType::Element { tag_name, attributes, .. } => {
+                if tag_name == "script" {
+                    if let Some(src) = attributes.iter().find(|attr| attr.name == "src") {
+                        debug!(target: "browser", "Loading external JavaScript from {}", src.value);
+                        
+                        if let Ok(response) = self.networking.fetch(&src.value).await {
+                            let script = String::from_utf8_lossy(&response.body);
+                            self.js_engine.evaluate(&script)?;
+                        }
+                    }
+                }
+
+                // Use Box::pin for recursive async calls
+                for child in node.children() {
+                    Box::pin(self.execute_external_scripts(child)).await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }

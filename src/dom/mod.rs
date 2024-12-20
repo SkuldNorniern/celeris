@@ -11,6 +11,7 @@ pub enum NodeType {
     Element {
         tag_name: String,
         attributes: Vec<Attribute>,
+        events: Vec<EventHandler>,
     },
     Text(String),
     Comment(String),
@@ -20,6 +21,12 @@ pub enum NodeType {
 pub struct Attribute {
     pub name: String,
     pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EventHandler {
+    pub event_type: String,
+    pub handler: String,
 }
 
 pub struct DomTree {
@@ -93,6 +100,7 @@ impl Node {
             NodeType::Element {
                 tag_name,
                 attributes,
+                ..
             } => {
                 let attrs: Vec<String> = attributes
                     .iter()
@@ -122,6 +130,27 @@ impl Node {
 
         if let NodeType::Element { tag_name, .. } = &self.node_type {
             debug!(target: "dom", "{}</{}> (end)", indent, tag_name);
+        }
+    }
+
+    pub fn add_event_listener(&mut self, event_type: &str, handler: &str) {
+        if let NodeType::Element { events, .. } = &mut self.node_type {
+            events.push(EventHandler {
+                event_type: event_type.to_string(),
+                handler: handler.to_string(),
+            });
+            debug!(target: "dom", "Added event listener for {}", event_type);
+        }
+    }
+
+    pub fn trigger_event(&self, event_type: &str) -> Option<&str> {
+        if let NodeType::Element { events, .. } = &self.node_type {
+            events
+                .iter()
+                .find(|e| e.event_type == event_type)
+                .map(|e| e.handler.as_str())
+        } else {
+            None
         }
     }
 }

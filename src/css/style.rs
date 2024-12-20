@@ -28,6 +28,7 @@ impl StyleEngine {
             NodeType::Element {
                 tag_name,
                 attributes,
+                ..
             } => rule
                 .selectors
                 .iter()

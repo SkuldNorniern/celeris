@@ -20,6 +20,7 @@ impl Parser {
         let mut root = Node::new(NodeType::Element {
             tag_name: String::from("html"),
             attributes: Vec::new(),
+            events: Vec::new(),
         });
         let current_node = &mut root;
         let mut ancestor_stack = Vec::new();
@@ -32,6 +33,7 @@ impl Parser {
                     let new_node = Node::new(NodeType::Element {
                         tag_name: name.clone(),
                         attributes,
+                        events: Vec::new(),
                     });
 
                     if !is_void_element(&name) {
