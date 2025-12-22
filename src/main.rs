@@ -12,6 +12,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut engine = Browser::new(BrowserConfig {
         headless: true,
         debug: true,
+        enable_javascript: false,
     })?;
 
     println!("Celeris Browser Engine");

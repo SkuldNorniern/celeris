@@ -20,6 +20,7 @@ pub struct Browser {
 pub struct BrowserConfig {
     pub headless: bool,
     pub debug: bool,
+    pub enable_javascript: bool,
 }
 
 impl Browser {
@@ -70,10 +71,15 @@ impl Browser {
         let mut parser = html::parser::Parser::new(html_content);
         let dom = parser.parse();
 
-        let root = dom.root().ok_or("No root node found")?;
+        let dom_root = dom.root().ok_or("No root node found")?;
+        let root = self
+            .find_first_element(dom_root, "html")
+            .unwrap_or(dom_root);
 
-        // Add JavaScript processing
-        self.process_javascript(&root).await?;
+        if self.config.enable_javascript {
+            // JavaScript is best-effort for now: failures should not abort page load.
+            self.process_javascript(&root, url).await;
+        }
 
         // Add debug information about the root node
         println!("\n[+] DOM Root Node Info:");
@@ -112,6 +118,23 @@ impl Browser {
         println!("\n{}", "=".repeat(50));
 
         Ok(())
+    }
+
+    fn find_first_element<'a>(&self, node: &'a dom::Node, tag_name: &str) -> Option<&'a dom::Node> {
+        match node.node_type() {
+            dom::NodeType::Element { tag_name: t, .. } if t.eq_ignore_ascii_case(tag_name) => {
+                return Some(node);
+            }
+            _ => {}
+        }
+
+        for child in node.children() {
+            if let Some(found) = self.find_first_element(child, tag_name) {
+                return Some(found);
+            }
+        }
+
+        None
     }
 
     fn extract_content(&self, node: &dom::Node) {
@@ -214,27 +237,36 @@ impl Browser {
         }
     }
 
-    async fn process_javascript(&mut self, root: &dom::Node) -> Result<(), Box<dyn Error>> {
-        // Find and execute inline scripts
-        self.execute_inline_scripts(root)?;
-        
-        // Find and execute external scripts
-        self.execute_external_scripts(root).await?;
-        
-        Ok(())
+    async fn process_javascript(&mut self, root: &dom::Node, base_url: &str) {
+        // Find and execute inline scripts (best-effort).
+        self.execute_inline_scripts(root);
+
+        // Find and execute external scripts (best-effort).
+        if let Ok(base_uri) = crate::networking::Uri::parse(base_url) {
+            self.execute_external_scripts(root, &base_uri).await;
+        } else {
+            log::warn!(target: "browser", "Invalid base URL for script resolution: {}", base_url);
+        }
     }
 
-    fn execute_inline_scripts(&mut self, node: &dom::Node) -> Result<(), Box<dyn Error>> {
+    fn execute_inline_scripts(&mut self, node: &dom::Node) {
         match node.node_type() {
             dom::NodeType::Element { tag_name, attributes, .. } => {
                 if tag_name == "script" {
+                    if !is_javascript_script_tag(attributes) {
+                        // e.g. application/ld+json, module, etc.
+                        return;
+                    }
+
                     // Check if it's an inline script (no src attribute)
                     if !attributes.iter().any(|attr| attr.name == "src") {
                         // Get the script content from children
                         if let Some(text_node) = node.children().first() {
                             if let dom::NodeType::Text(script) = text_node.node_type() {
                                 debug!(target: "browser", "Executing inline JavaScript");
-                                self.js_engine.evaluate(script)?;
+                                if let Err(e) = self.js_engine.evaluate(script) {
+                                    log::warn!(target: "javascript", "Inline script error: {}", e);
+                                }
                             }
                         }
                     }
@@ -242,35 +274,101 @@ impl Browser {
 
                 // Recursively process children
                 for child in node.children() {
-                    self.execute_inline_scripts(child)?;
+                    self.execute_inline_scripts(child);
                 }
             }
             _ => {}
         }
-        Ok(())
     }
 
-    async fn execute_external_scripts(&mut self, node: &dom::Node) -> Result<(), Box<dyn Error>> {
+    async fn execute_external_scripts(&mut self, node: &dom::Node, base_uri: &crate::networking::Uri) {
+        const MAX_EXTERNAL_SCRIPT_BYTES: usize = 256 * 1024; // Keep initial JS support lightweight.
+
         match node.node_type() {
             dom::NodeType::Element { tag_name, attributes, .. } => {
                 if tag_name == "script" {
+                    if !is_javascript_script_tag(attributes) {
+                        return;
+                    }
+
                     if let Some(src) = attributes.iter().find(|attr| attr.name == "src") {
-                        debug!(target: "browser", "Loading external JavaScript from {}", src.value);
+                        let resolved = match base_uri.resolve_reference(&src.value) {
+                            Ok(u) => u,
+                            Err(e) => {
+                                log::warn!(
+                                    target: "browser",
+                                    "Failed to resolve script src '{}' against '{}': {}",
+                                    src.value,
+                                    base_uri,
+                                    e
+                                );
+                                return;
+                            }
+                        };
+
+                        debug!(target: "browser", "Loading external JavaScript from {}", resolved);
                         
-                        if let Ok(response) = self.networking.fetch(&src.value).await {
-                            let script = String::from_utf8_lossy(&response.body);
-                            self.js_engine.evaluate(&script)?;
+                        match self.networking.fetch(&resolved).await {
+                            Ok(response) => {
+                                if response.body.len() > MAX_EXTERNAL_SCRIPT_BYTES {
+                                    log::warn!(
+                                        target: "javascript",
+                                        "Skipping large external script ({} bytes): {}",
+                                        response.body.len(),
+                                        resolved
+                                    );
+                                    return;
+                                }
+
+                                let script = String::from_utf8_lossy(&response.body);
+                                if let Err(e) = self.js_engine.evaluate(&script) {
+                                    log::warn!(
+                                        target: "javascript",
+                                        "External script error ({}): {}",
+                                        resolved,
+                                        e
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    target: "browser",
+                                    "Failed to load external script {}: {}",
+                                    resolved,
+                                    e
+                                );
+                            }
                         }
                     }
                 }
 
                 // Use Box::pin for recursive async calls
                 for child in node.children() {
-                    Box::pin(self.execute_external_scripts(child)).await?;
+                    Box::pin(self.execute_external_scripts(child, base_uri)).await;
                 }
             }
             _ => {}
         }
-        Ok(())
     }
+}
+
+fn is_javascript_script_tag(attributes: &[dom::Attribute]) -> bool {
+    // Default is JavaScript if type is omitted.
+    let Some(t) = attributes.iter().find(|a| a.name.eq_ignore_ascii_case("type")) else {
+        return true;
+    };
+
+    let v = t.value.trim();
+    if v.is_empty() {
+        return true;
+    }
+
+    // Keep it strict for now: treat anything non-JS (like application/ld+json) as not executable.
+    matches!(
+        v,
+        "text/javascript"
+            | "application/javascript"
+            | "text/ecmascript"
+            | "application/ecmascript"
+    )
 }
