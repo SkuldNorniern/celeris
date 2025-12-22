@@ -68,6 +68,10 @@ impl Browser {
             .unwrap_or(dom_root);
 
         if self.config.enable_javascript {
+            // Bind DOM to JavaScript engine before executing scripts
+            if let Err(e) = self.js_engine.bind_dom(&root) {
+                log::warn!(target: "javascript", "Failed to bind DOM: {}", e);
+            }
             // JavaScript is best-effort for now: failures should not abort page load.
             self.process_javascript(&root, url).await;
         }

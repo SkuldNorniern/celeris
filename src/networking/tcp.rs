@@ -164,14 +164,17 @@ impl TcpConnection {
 
         if is_chunked {
             // For chunked, we need to read until we see the terminating chunk (0\r\n\r\n)
-            while !data.ends_with(b"0\r\n\r\n") && !data.ends_with(b"\r\n0\r\n\r\n") {
+            // The terminator can appear anywhere after the body start, followed by optional trailers
+            while !has_chunked_terminator(&data[body_start..]) {
                 let n = self.read_some(&mut buffer).await?;
                 if n == 0 {
+                    log::debug!(target: "network", "EOF while reading chunked body");
                     break;
                 }
                 data.extend_from_slice(&buffer[..n]);
                 // Safety check for very large responses
                 if data.len() > Self::MAX_DECODED_BODY_BYTES + 1024 * 1024 {
+                    log::warn!(target: "network", "Chunked body exceeds max size, truncating");
                     break;
                 }
             }
@@ -351,6 +354,55 @@ fn find_header_end(data: &[u8]) -> Option<usize> {
     None
 }
 
+/// Check if chunked body contains the terminating chunk (0\r\n followed by trailers and \r\n)
+fn has_chunked_terminator(body: &[u8]) -> bool {
+    // Look for \r\n0\r\n which indicates start of terminating chunk
+    // The full terminator is: \r\n0\r\n(<trailers>)?\r\n
+    // We look for the simpler pattern of just ending with 0\r\n\r\n or having \r\n0\r\n\r\n
+    if body.is_empty() {
+        return false;
+    }
+    
+    // Check for terminator at end
+    if body.ends_with(b"0\r\n\r\n") || body.ends_with(b"\r\n0\r\n\r\n") {
+        return true;
+    }
+    
+    // Also look for the terminating chunk pattern within the data
+    // A chunked terminator is: CRLF "0" CRLF (optional-trailers) CRLF
+    // The key signature is CRLF "0" CRLF CRLF (no trailers) or CRLF "0" CRLF <header> CRLF CRLF
+    for i in 0..body.len().saturating_sub(4) {
+        // Look for \r\n0\r\n
+        if body.get(i..i+5) == Some(b"\r\n0\r\n") {
+            // Check if this is followed by another CRLF (end of trailers)
+            let trailer_start = i + 5;
+            let mut j = trailer_start;
+            // Skip any trailer lines
+            while j + 1 < body.len() {
+                if body[j] == b'\r' && body[j + 1] == b'\n' {
+                    // Found CRLF - either end of trailer line or end of trailers
+                    if j == trailer_start || (j > trailer_start && body.get(j-1) == Some(&b'\n')) {
+                        // Empty line = end of trailers
+                        return true;
+                    }
+                    // Look for the next CRLF to see if it's the end
+                    let next = j + 2;
+                    if next + 1 < body.len() && body[next] == b'\r' && body[next + 1] == b'\n' {
+                        return true;
+                    }
+                }
+                j += 1;
+            }
+            // If we're at the very end, assume terminator
+            if j >= body.len().saturating_sub(2) {
+                return true;
+            }
+        }
+    }
+    
+    false
+}
+
 fn is_transfer_encoding_chunked(headers: &http::Headers) -> bool {
     let Some(te) = headers.get("transfer-encoding") else {
         return false;
@@ -361,13 +413,43 @@ fn is_transfer_encoding_chunked(headers: &http::Headers) -> bool {
 }
 
 fn decode_chunked_body(input: &[u8], max_decoded_size: usize) -> Result<Vec<u8>, NetworkError> {
+    // Handle empty input gracefully
+    if input.is_empty() {
+        log::debug!(target: "network", "Chunked body is empty");
+        return Ok(Vec::new());
+    }
+    
     let mut out = Vec::new();
     let mut i = 0usize;
 
     loop {
-        let line_end = find_crlf(input, i).ok_or_else(|| {
-            NetworkError::ParseError("Invalid chunked encoding: missing CRLF after size".to_string())
-        })?;
+        // Skip any leading whitespace/CRLF (some servers add extra)
+        while i < input.len() && (input[i] == b'\r' || input[i] == b'\n' || input[i] == b' ') {
+            i += 1;
+        }
+        
+        if i >= input.len() {
+            // End of input reached
+            break;
+        }
+        
+        let line_end = match find_crlf(input, i) {
+            Some(end) => end,
+            None => {
+                // No CRLF found - might be truncated data or end of stream
+                // Try to parse what we have as a chunk size anyway
+                log::debug!(target: "network", "Chunked: no CRLF found at position {}, input len {}", i, input.len());
+                // If we already have data, return it; otherwise error
+                if !out.is_empty() {
+                    log::warn!(target: "network", "Chunked encoding truncated, returning partial data");
+                    return Ok(out);
+                }
+                return Err(NetworkError::ParseError(
+                    "Invalid chunked encoding: missing CRLF after size".to_string()
+                ));
+            }
+        };
+        
         let size_line = &input[i..line_end];
         i = line_end + 2;
 
@@ -377,25 +459,29 @@ fn decode_chunked_body(input: &[u8], max_decoded_size: usize) -> Result<Vec<u8>,
             .next()
             .unwrap_or(size_line);
         let size_str = String::from_utf8_lossy(size_field);
-        let size = usize::from_str_radix(size_str.trim(), 16).map_err(|_| {
-            NetworkError::ParseError(format!(
-                "Invalid chunk size field in chunked encoding: '{}'",
-                size_str.trim()
-            ))
-        })?;
+        let trimmed = size_str.trim();
+        
+        // Handle empty size field
+        if trimmed.is_empty() {
+            continue;
+        }
+        
+        let size = match usize::from_str_radix(trimmed, 16) {
+            Ok(s) => s,
+            Err(_) => {
+                log::debug!(target: "network", "Invalid chunk size '{}', stopping", trimmed);
+                break;
+            }
+        };
 
         if size == 0 {
             // Trailers: 0\r\n(<header>\r\n)*\r\n
             loop {
-                let trailer_end = find_crlf(input, i).ok_or_else(|| {
-                    NetworkError::ParseError(
-                        "Invalid chunked encoding: missing CRLF in trailers".to_string(),
-                    )
-                })?;
-                if trailer_end == i {
-                    break;
+                match find_crlf(input, i) {
+                    Some(trailer_end) if trailer_end == i => break,
+                    Some(trailer_end) => i = trailer_end + 2,
+                    None => break, // No more trailers, done
                 }
-                i = trailer_end + 2;
             }
             break;
         }
@@ -404,25 +490,34 @@ fn decode_chunked_body(input: &[u8], max_decoded_size: usize) -> Result<Vec<u8>,
             return Err(NetworkError::TooLargeResponse);
         }
 
-        let chunk_end = i.checked_add(size).ok_or_else(|| {
-            NetworkError::ParseError("Invalid chunked encoding: chunk size overflow".to_string())
-        })?;
+        let chunk_end = match i.checked_add(size) {
+            Some(end) => end,
+            None => {
+                log::warn!(target: "network", "Chunk size overflow, returning partial data");
+                break;
+            }
+        };
+        
         if chunk_end > input.len() {
-            return Err(NetworkError::ParseError(
-                "Invalid chunked encoding: chunk data beyond buffer".to_string(),
-            ));
+            // Truncated chunk - take what we can
+            log::warn!(target: "network", "Chunked data truncated (expected {} bytes, have {})", size, input.len() - i);
+            if i < input.len() {
+                out.extend_from_slice(&input[i..]);
+            }
+            break;
         }
 
         out.extend_from_slice(&input[i..chunk_end]);
         i = chunk_end;
 
         // Each chunk is followed by CRLF.
-        if input.get(i..i + 2) != Some(b"\r\n") {
-            return Err(NetworkError::ParseError(
-                "Invalid chunked encoding: missing CRLF after chunk data".to_string(),
-            ));
+        if input.get(i..i + 2) == Some(b"\r\n") {
+            i += 2;
+        } else if i < input.len() && input[i] == b'\n' {
+            // Some servers use just LF
+            i += 1;
         }
-        i += 2;
+        // If no CRLF, just continue - might be end of data
     }
 
     Ok(out)
