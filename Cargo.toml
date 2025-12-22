@@ -11,6 +11,7 @@ tokio-rustls = "0.26.1"
 webpki-roots = "0.26.7"
 # gzip/deflate decompression for HTTP responses
 flate2 = "1.0"
+gpui = { version ="0.2.2", optional = true }
 
 [lints.clippy]
 unwrap_used = "deny"
@@ -19,3 +20,7 @@ cognitive_complexity = "deny"
 [profile.release]
 lto = 'fat'
 opt-level = 3
+
+[features]
+default = []
+gui = ["dep:gpui"]
