@@ -1,6 +1,12 @@
 use crate::css::style::StyledNode;
 use std::error::Error;
 
+#[cfg(feature = "gui")]
+pub mod gui;
+
+pub mod layout;
+pub mod painter;
+
 pub struct Renderer {
     headless: bool,
     layout_engine: LayoutEngine,
