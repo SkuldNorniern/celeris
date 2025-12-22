@@ -49,17 +49,8 @@ impl Browser {
         println!("{}", raw_content);
         println!("{}", "=".repeat(50));
 
-        let html_content = if let Some(body_start) = raw_content.find("<!doctype") {
-            raw_content[body_start..].to_string()
-        } else if let Some(body_start) = raw_content.find("<html") {
-            raw_content[body_start..].to_string()
-        } else if let Some(body_start) = raw_content.find("<?xml") {
-            raw_content[body_start..].to_string()
-        } else if let Some(body_start) = raw_content.find("<body") {
-            raw_content[body_start..].to_string()
-        } else {
-            raw_content.to_string()
-        };
+        // Use the full HTML content as-is - the parser should handle DOCTYPE, comments, etc.
+        let html_content = raw_content.to_string();
 
         if self.config.debug {
             println!("\n[DEBUG] Parsed HTML content:");
@@ -102,8 +93,11 @@ impl Browser {
 
         debug!(target: "browser", "Found root node with {} children", root.children().len());
 
-        // Parse CSS and apply styles
+        // Parse CSS - disabled for now due to chunked encoding issues with some servers
         let stylesheet = css::StyleSheet::new();
+        // TODO: Fix chunked encoding parser, then re-enable:
+        // let base_uri = crate::networking::Uri::parse(url).ok();
+        // let stylesheet = self.load_stylesheets(root, base_uri.as_ref()).await;
         let style_engine = css::style::StyleEngine::new(stylesheet);
         let styled_dom = style_engine.apply_styles(root);
 
@@ -371,4 +365,104 @@ fn is_javascript_script_tag(attributes: &[dom::Attribute]) -> bool {
             | "text/ecmascript"
             | "application/ecmascript"
     )
+}
+
+impl Browser {
+    /// Load all stylesheets from inline <style> tags and external <link rel="stylesheet"> tags.
+    async fn load_stylesheets(
+        &self,
+        root: &dom::Node,
+        base_uri: Option<&crate::networking::Uri>,
+    ) -> css::StyleSheet {
+        const CSS_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+        
+        let mut stylesheet = css::StyleSheet::new();
+        let mut css_sources = Vec::new();
+
+        // Collect inline styles and external stylesheet URLs
+        self.collect_css_sources(root, &mut css_sources);
+
+        for source in css_sources {
+            match source {
+                CssSource::Inline(css) => {
+                    let mut parser = css::parser::CssParser::new(css);
+                    let parsed = parser.parse();
+                    for rule in parsed.rules() {
+                        stylesheet.add_rule(rule.clone());
+                    }
+                }
+                CssSource::External(href) => {
+                    let Some(base) = base_uri else { continue };
+                    let resolved = match base.resolve_reference(&href) {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+                    
+                    // Fetch with timeout to avoid hanging on slow/broken CSS resources
+                    let fetch_result = tokio::time::timeout(
+                        CSS_FETCH_TIMEOUT,
+                        self.networking.fetch(&resolved)
+                    ).await;
+                    
+                    let response = match fetch_result {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
+                            log::warn!(target: "browser", "Failed to fetch CSS {}: {}", resolved, e);
+                            continue;
+                        }
+                        Err(_) => {
+                            log::warn!(target: "browser", "CSS fetch timed out: {}", resolved);
+                            continue;
+                        }
+                    };
+                    
+                    let css = String::from_utf8_lossy(&response.body).to_string();
+                    let mut parser = css::parser::CssParser::new(css);
+                    let parsed = parser.parse();
+                    for rule in parsed.rules() {
+                        stylesheet.add_rule(rule.clone());
+                    }
+                }
+            }
+        }
+
+        stylesheet
+    }
+
+    fn collect_css_sources(&self, node: &dom::Node, sources: &mut Vec<CssSource>) {
+        match node.node_type() {
+            dom::NodeType::Element { tag_name, attributes, .. } => {
+                // Inline <style> tags
+                if tag_name.eq_ignore_ascii_case("style") {
+                    if let Some(text_node) = node.children().first() {
+                        if let dom::NodeType::Text(css) = text_node.node_type() {
+                            sources.push(CssSource::Inline(css.clone()));
+                        }
+                    }
+                }
+                // External <link rel="stylesheet" href="...">
+                else if tag_name.eq_ignore_ascii_case("link") {
+                    let is_stylesheet = attributes
+                        .iter()
+                        .any(|a| a.name.eq_ignore_ascii_case("rel") && a.value.eq_ignore_ascii_case("stylesheet"));
+                    if is_stylesheet {
+                        if let Some(href) = attributes.iter().find(|a| a.name.eq_ignore_ascii_case("href")) {
+                            sources.push(CssSource::External(href.value.clone()));
+                        }
+                    }
+                }
+
+                // Recurse into children
+                for child in node.children() {
+                    self.collect_css_sources(child, sources);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+enum CssSource {
+    Inline(String),
+    External(String),
 }

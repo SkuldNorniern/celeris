@@ -17,6 +17,7 @@ pub enum Token {
 pub struct Tokenizer {
     input: Vec<char>,
     position: usize,
+    pending_text: Option<String>,
 }
 
 impl Tokenizer {
@@ -24,10 +25,16 @@ impl Tokenizer {
         Self {
             input: input.chars().collect(),
             position: 0,
+            pending_text: None,
         }
     }
 
     pub fn next_token(&mut self) -> Option<Token> {
+        // If we have pending text from a script/style tag, return it first
+        if let Some(text) = self.pending_text.take() {
+            return Some(Token::Text(text));
+        }
+
         self.consume_whitespace();
 
         if self.position >= self.input.len() {
@@ -52,13 +59,21 @@ impl Tokenizer {
         let mut attributes = Vec::new();
 
         // Parse tag name
-        while !self.eof() && !self.current_char().is_whitespace() && self.current_char() != '>' {
+        while !self.eof() && !self.current_char().is_whitespace() && self.current_char() != '>' && self.current_char() != '/' {
             name.push(self.consume_char());
         }
 
         // Parse attributes
         self.consume_whitespace();
         while !self.eof() && self.current_char() != '>' {
+            // Handle self-closing tag marker (/>)
+            if self.current_char() == '/' {
+                self.position += 1;
+                // Skip to '>' 
+                self.consume_whitespace();
+                break;
+            }
+            
             if let Some(attr) = self.consume_attribute() {
                 attributes.push(attr);
             }
@@ -68,6 +83,15 @@ impl Tokenizer {
         // Consume '>'
         if !self.eof() && self.current_char() == '>' {
             self.position += 1;
+        }
+
+        // For script/style tags, capture their content as raw text
+        let tag_lower = name.to_lowercase();
+        if tag_lower == "script" || tag_lower == "style" {
+            if let Some(text_content) = self.consume_raw_text(&tag_lower) {
+                // Store it to be returned as the next token
+                self.pending_text = Some(text_content);
+            }
         }
 
         Some(Token::StartTag { name, attributes })
@@ -106,13 +130,19 @@ impl Tokenizer {
     fn consume_attribute(&mut self) -> Option<Attribute> {
         let mut name = String::new();
 
-        // Parse attribute name
+        // Parse attribute name (stop at '/' for self-closing tags)
         while !self.eof()
             && !self.current_char().is_whitespace()
             && self.current_char() != '='
             && self.current_char() != '>'
+            && self.current_char() != '/'
         {
             name.push(self.consume_char());
+        }
+
+        // Empty name means we hit '/' or '>' immediately
+        if name.is_empty() {
+            return None;
         }
 
         self.consume_whitespace();
@@ -141,7 +171,7 @@ impl Tokenizer {
             value
         } else {
             let mut value = String::new();
-            while !self.eof() && !self.current_char().is_whitespace() && self.current_char() != '>'
+            while !self.eof() && !self.current_char().is_whitespace() && self.current_char() != '>' && self.current_char() != '/'
             {
                 value.push(self.consume_char());
             }
@@ -218,5 +248,30 @@ impl Tokenizer {
 
     fn eof(&self) -> bool {
         self.position >= self.input.len()
+    }
+
+    // Consume raw text content for <script> and <style> tags until their closing tag
+    fn consume_raw_text(&mut self, tag_name: &str) -> Option<String> {
+        let mut content = String::new();
+        let closing_tag = format!("</{}>", tag_name);
+        
+        while !self.eof() {
+            // Check if we're at the closing tag
+            if self.position + closing_tag.len() <= self.input.len() {
+                let remaining: String = self.input[self.position..self.position + closing_tag.len()].iter().collect();
+                if remaining.to_lowercase() == closing_tag.to_lowercase() {
+                    // Don't consume the closing tag, let the normal flow handle it
+                    break;
+                }
+            }
+            
+            content.push(self.consume_char());
+        }
+
+        if content.is_empty() {
+            None
+        } else {
+            Some(content)
+        }
     }
 }
