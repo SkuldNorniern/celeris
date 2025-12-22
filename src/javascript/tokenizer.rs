@@ -238,7 +238,9 @@ pub fn tokenize(source: &str) -> Vec<Token> {
             
             // Skip unknown characters
             c => {
-                warn!(target: "javascript", "Skipping unknown character: {:?}", c);
+                // Many real-world scripts contain tokens we don't support yet (template strings, etc).
+                // Logging each character at WARN is too noisy and slows down page loads.
+                debug!(target: "javascript", "Skipping unknown character: {:?}", c);
                 chars.next();
             }
         }
