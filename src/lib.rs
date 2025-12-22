@@ -3,7 +3,7 @@ mod dom;
 mod html;
 pub mod logger;
 mod networking;
-mod rendering;
+pub mod rendering;
 mod javascript;
 
 use log::{debug, info};
