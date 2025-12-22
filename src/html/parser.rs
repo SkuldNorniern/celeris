@@ -17,13 +17,16 @@ impl Parser {
     pub fn parse(&mut self) -> DomTree {
         info!(target: "html", "Starting HTML parsing");
         let mut dom = DomTree::new();
-        let mut root = Node::new(NodeType::Element {
-            tag_name: String::from("html"),
+        // Build a simple DOM tree with a stack of open elements.
+        //
+        // We keep a document root to avoid duplicating <html> when the input contains
+        // an explicit <html> element (most pages do).
+        let mut stack: Vec<Node> = Vec::new();
+        stack.push(Node::new(NodeType::Element {
+            tag_name: String::from("#document"),
             attributes: Vec::new(),
             events: Vec::new(),
-        });
-        let current_node = &mut root;
-        let mut ancestor_stack = Vec::new();
+        }));
 
         while let Some(token) = self.tokenizer.next_token() {
             debug!(target: "html", "Processing token: {:?}", token);
@@ -37,19 +40,37 @@ impl Parser {
                     });
 
                     if !is_void_element(&name) {
-                        let temp = std::mem::replace(current_node, new_node);
-                        ancestor_stack.push(temp);
+                        stack.push(new_node);
                     } else {
-                        current_node.add_child(new_node);
+                        if let Some(parent) = stack.last_mut() {
+                            parent.add_child(new_node);
+                        }
                     }
                 }
                 Token::EndTag { name } => {
-                    debug!(target: "html", "Found end tag: </{}> (stack size: {})", 
-                        name, ancestor_stack.len());
-                    if !is_void_element(&name) {
-                        if let Some(parent) = ancestor_stack.pop() {
-                            let completed_node = std::mem::replace(current_node, parent);
-                            current_node.add_child(completed_node);
+                    debug!(
+                        target: "html",
+                        "Found end tag: </{}> (open elements: {})",
+                        name,
+                        stack.len()
+                    );
+
+                    if is_void_element(&name) {
+                        continue;
+                    }
+
+                    // Pop and attach nodes until we close a matching start tag, or we hit the
+                    // document root (basic error recovery for mismatched tags).
+                    while stack.len() > 1 {
+                        let Some(node) = stack.pop() else {
+                            break;
+                        };
+                        let is_match = node_is_element_named(&node, &name);
+                        if let Some(parent) = stack.last_mut() {
+                            parent.add_child(node);
+                        }
+                        if is_match {
+                            break;
                         }
                     }
                 }
@@ -58,14 +79,18 @@ impl Parser {
                         debug!(target: "html", "Found text node: {}", 
                             content.chars().take(30).collect::<String>());
                         let text_node = Node::new(NodeType::Text(content));
-                        current_node.add_child(text_node);
+                        if let Some(parent) = stack.last_mut() {
+                            parent.add_child(text_node);
+                        }
                     }
                 }
                 Token::Comment(content) => {
                     debug!(target: "html", "Found comment: {}", 
                         content.chars().take(30).collect::<String>());
                     let comment_node = Node::new(NodeType::Comment(content));
-                    current_node.add_child(comment_node);
+                    if let Some(parent) = stack.last_mut() {
+                        parent.add_child(comment_node);
+                    }
                 }
                 Token::Doctype(_) => {
                     // Just ignore doctype for now
@@ -73,7 +98,19 @@ impl Parser {
             }
         }
 
-        dom.set_root(root);
+        // Close any still-open elements.
+        while stack.len() > 1 {
+            let Some(node) = stack.pop() else {
+                break;
+            };
+            if let Some(parent) = stack.last_mut() {
+                parent.add_child(node);
+            }
+        }
+
+        if let Some(root) = stack.pop() {
+            dom.set_root(root);
+        }
         info!(target: "html", "HTML parsing complete");
         dom
     }
@@ -97,4 +134,11 @@ fn is_void_element(tag_name: &str) -> bool {
             | "track"
             | "wbr"
     )
+}
+
+fn node_is_element_named(node: &Node, expected: &str) -> bool {
+    match node.node_type() {
+        NodeType::Element { tag_name, .. } => tag_name.eq_ignore_ascii_case(expected),
+        _ => false,
+    }
 }
