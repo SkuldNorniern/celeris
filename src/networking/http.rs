@@ -1,7 +1,7 @@
 use crate::networking::error::NetworkError;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Response {
     pub version: Version,
     pub status: Status,
@@ -18,7 +18,7 @@ pub struct Request {
     body: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Headers(HashMap<String, String>);
 
 #[derive(Debug)]
@@ -29,13 +29,13 @@ pub enum Method {
     // Add more as needed
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Status {
     pub code: u16,
     pub text: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Version {
     Http10,
     Http11,

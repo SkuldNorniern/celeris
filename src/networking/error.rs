@@ -15,6 +15,7 @@ pub enum NetworkError {
     InvalidStatusCode,
     InvalidHeader,
     TooLargeResponse,
+    TooManyRedirects,
     Timeout,
 }
 
@@ -36,6 +37,7 @@ impl fmt::Display for NetworkError {
             NetworkError::InvalidStatusCode => write!(f, "Invalid status code"),
             NetworkError::InvalidHeader => write!(f, "Invalid header"),
             NetworkError::TooLargeResponse => write!(f, "Response too large"),
+            NetworkError::TooManyRedirects => write!(f, "Too many redirects"),
             NetworkError::Timeout => write!(f, "Request timed out"),
         }
     }
