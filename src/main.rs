@@ -1,10 +1,56 @@
 use celeris::{Browser, BrowserConfig};
 use log::info;
-use std::error::Error;
-use std::io::{self, Write}; // Assuming your crate is named celeris_browser
 
+#[cfg(feature = "gui")]
+use celeris::rendering::gui::BrowserApp;
+
+#[cfg(not(feature = "gui"))]
+use std::error::Error;
+#[cfg(not(feature = "gui"))]
+use std::io::{self, Write};
+
+#[cfg(feature = "gui")]
+fn main() {
+    // Install rustls crypto provider before any TLS operations
+    if let Err(e) = rustls::crypto::ring::default_provider().install_default() {
+        eprintln!("Failed to install rustls crypto provider: {:?}", e);
+        return;
+    }
+    
+    // Initialize logger with error handling
+    if let Err(e) = celeris::logger::init(log::LevelFilter::Info) {
+        eprintln!("Failed to initialize logger: {}", e);
+        return;
+    }
+
+    let browser = match Browser::new(BrowserConfig {
+        headless: false,
+        debug: true,
+        enable_javascript: true,
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Failed to create browser: {}", e);
+            return;
+        }
+    };
+
+    println!("Celeris Browser Engine");
+    info!(target: "browser", "Browser engine initialized with GUI");
+
+    // Launch GUI application
+    let app = BrowserApp::with_browser(browser);
+    app.run();
+}
+
+#[cfg(not(feature = "gui"))]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // Install rustls crypto provider before any TLS operations
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| "Failed to install rustls crypto provider")?;
+    
     // Initialize logger with error handling
     celeris::logger::init(log::LevelFilter::Info)
         .map_err(|e| format!("Failed to initialize logger: {}", e))?;
