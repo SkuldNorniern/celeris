@@ -1,28 +1,28 @@
 mod error;
 mod http;
+mod pool;
 mod tcp;
 mod uri;
+mod user_agent;
 
 pub use error::NetworkError;
 pub use uri::Uri;
-use tcp::TcpConnection;
+use pool::ConnectionPool;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
 
 pub struct NetworkManager {
-    client: HttpClient,
     cache: Mutex<ResponseCache>,
-}
-
-pub struct HttpClient {
-    timeout: std::time::Duration,
+    cookies: Mutex<CookieJar>,
+    pool: ConnectionPool,
 }
 
 impl NetworkManager {
     pub fn new() -> Result<Self, NetworkError> {
         Ok(Self {
-            client: HttpClient::new(),
             cache: Mutex::new(ResponseCache::new()),
+            cookies: Mutex::new(CookieJar::new()),
+            pool: ConnectionPool::new(),
         })
     }
 
@@ -31,39 +31,56 @@ impl NetworkManager {
             return Ok(hit);
         }
 
-        let response = self.client.get(url).await?;
+        let cookie_header = self.cookies.lock().await.get_cookie_header(url);
+        let response = self.fetch_with_pool(url, cookie_header.as_deref()).await?;
+        
+        // Extract Set-Cookie headers and store them
+        self.cookies.lock().await.extract_cookies(url, &response.headers);
+        
         self.cache.lock().await.insert(url, &response);
         Ok(response)
     }
-}
 
-impl HttpClient {
-    pub fn new() -> Self {
-        Self {
-            timeout: std::time::Duration::from_secs(30),
-        }
-    }
-
-    pub async fn get(&self, url: &str) -> Result<http::Response, NetworkError> {
+    async fn fetch_with_pool(&self, url: &str, cookie_header: Option<&str>) -> Result<http::Response, NetworkError> {
         const MAX_REDIRECTS: usize = 10;
+        const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
         let mut current = url.to_string();
 
         for _ in 0..MAX_REDIRECTS {
             let uri = Uri::parse(&current)?;
-            let mut connection = TcpConnection::connect(&uri).await?;
+            let mut connection = self.pool.get(&uri).await?;
 
-            let request = http::Request::new()
+            let mut builder = http::Request::new()
                 .method(http::Method::GET)
                 .uri(uri.request_target())
                 .header("Host", uri.host())
-                .header("Connection", "close")
-                .header("User-Agent", "Celeris/0.1")
-                .header("Accept", "*/*")
-                // Prefer uncompressed responses for now. This avoids needing gzip/br support.
-                .header("Accept-Encoding", "identity")
-                .build()?;
+                .header("Connection", "keep-alive")
+                .header("User-Agent", user_agent::user_agent())
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Encoding", "gzip, deflate, identity")
+                .header("Accept-Language", "en-US,en;q=0.9");
 
-            let response = connection.send_request(&request).await?;
+            if let Some(cookies) = cookie_header {
+                if !cookies.is_empty() {
+                    builder = builder.header("Cookie", cookies);
+                }
+            }
+
+            let request = builder.build()?;
+            
+            // Wrap send_request with timeout
+            let response = tokio::time::timeout(
+                REQUEST_TIMEOUT,
+                connection.send_request(&request)
+            )
+            .await
+            .map_err(|_| NetworkError::Timeout("Request timed out".to_string()))??;
+
+            // Don't reuse connections for now - causes hangs when the response 
+            // reading leaves the connection in a bad state.
+            // TODO: Fix response reading to properly drain the connection before reuse.
+            drop(connection);
+
             if is_redirect_status(response.status.code) {
                 if let Some(location) = response.headers.get("location") {
                     current = uri.resolve_reference(location)?;
@@ -122,4 +139,97 @@ impl ResponseCache {
         self.entries.insert(url.to_string(), response.clone());
         self.current_body_bytes = self.current_body_bytes.saturating_add(response.body.len());
     }
+}
+
+// Simple in-memory cookie jar for session persistence
+struct CookieJar {
+    // Map: domain -> (name -> Cookie)
+    cookies: HashMap<String, HashMap<String, Cookie>>,
+}
+
+#[derive(Clone)]
+struct Cookie {
+    name: String,
+    value: String,
+    path: String,
+    // secure: bool, // For future: only send over HTTPS
+    // http_only: bool, // For future: not accessible via JS
+}
+
+impl CookieJar {
+    fn new() -> Self {
+        Self {
+            cookies: HashMap::new(),
+        }
+    }
+
+    // Extract cookies from Set-Cookie headers and store them
+    fn extract_cookies(&mut self, url: &str, headers: &http::Headers) {
+        let domain = match Uri::parse(url) {
+            Ok(uri) => uri.host().to_lowercase(),
+            Err(_) => return,
+        };
+
+        // Process all Set-Cookie headers (there can be multiple)
+        if let Some(set_cookies) = headers.get_all("set-cookie") {
+            for set_cookie in set_cookies {
+                if let Some(cookie) = parse_set_cookie(set_cookie, &domain) {
+                    self.cookies
+                        .entry(domain.clone())
+                        .or_default()
+                        .insert(cookie.name.clone(), cookie);
+                }
+            }
+        }
+    }
+
+    // Build Cookie header for a request
+    fn get_cookie_header(&self, url: &str) -> Option<String> {
+        let uri = Uri::parse(url).ok()?;
+        let domain = uri.host().to_lowercase();
+        let path = uri.path();
+
+        let domain_cookies = self.cookies.get(&domain)?;
+        if domain_cookies.is_empty() {
+            return None;
+        }
+
+        let cookies: Vec<String> = domain_cookies
+            .values()
+            .filter(|c| path.starts_with(&c.path))
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect();
+
+        if cookies.is_empty() {
+            None
+        } else {
+            Some(cookies.join("; "))
+        }
+    }
+}
+
+fn parse_set_cookie(header_value: &str, _default_domain: &str) -> Option<Cookie> {
+    // Format: name=value; Path=/; Domain=...; Secure; HttpOnly
+    let mut parts = header_value.split(';');
+    let name_value = parts.next()?.trim();
+    let (name, value) = name_value.split_once('=')?;
+
+    let mut path = "/".to_string();
+
+    for attr in parts {
+        let attr = attr.trim();
+        if let Some((key, val)) = attr.split_once('=') {
+            let key_lower = key.trim().to_lowercase();
+            if key_lower == "path" {
+                path = val.trim().to_string();
+            }
+            // We ignore Domain, Secure, HttpOnly, etc. for simplicity
+        }
+    }
+
+    Some(Cookie {
+        name: name.trim().to_string(),
+        value: value.trim().to_string(),
+        path,
+    })
 }

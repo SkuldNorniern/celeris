@@ -16,7 +16,7 @@ pub enum NetworkError {
     InvalidHeader,
     TooLargeResponse,
     TooManyRedirects,
-    Timeout,
+    Timeout(String),
 }
 
 impl std::error::Error for NetworkError {}
@@ -38,7 +38,7 @@ impl fmt::Display for NetworkError {
             NetworkError::InvalidHeader => write!(f, "Invalid header"),
             NetworkError::TooLargeResponse => write!(f, "Response too large"),
             NetworkError::TooManyRedirects => write!(f, "Too many redirects"),
-            NetworkError::Timeout => write!(f, "Request timed out"),
+            NetworkError::Timeout(e) => write!(f, "Request timed out: {}", e),
         }
     }
 }

@@ -1,5 +1,7 @@
 use crate::networking::{error::NetworkError, http, uri::Uri};
+use flate2::read::{GzDecoder, DeflateDecoder};
 use rustls::pki_types::ServerName;
+use std::io::Read;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -14,6 +16,7 @@ pub enum Connection {
 pub struct TcpConnection {
     connection: Connection,
     host: String,
+    keep_alive: bool,
 }
 
 impl TcpConnection {
@@ -59,11 +62,17 @@ impl TcpConnection {
         Ok(Self {
             connection,
             host: uri.host().to_string(),
+            keep_alive: true,
         })
     }
 
     pub fn host(&self) -> &str {
         &self.host
+    }
+
+    /// Returns true if the connection can be reused for another request.
+    pub fn is_keep_alive(&self) -> bool {
+        self.keep_alive
     }
 
     pub async fn send_request(
@@ -86,36 +95,9 @@ impl TcpConnection {
             }
         }
 
-        // Read response
-        let mut response_data = Vec::new();
-        let mut buffer = [0; 8192]; // Use a fixed-size buffer for reading
-
-        match &mut self.connection {
-            Connection::Plain(stream) => {
-                loop {
-                    match stream.read(&mut buffer).await {
-                        Ok(0) => break, // Connection closed
-                        Ok(n) => response_data.extend_from_slice(&buffer[..n]),
-                        Err(e) => return Err(NetworkError::ReceiveFailed(e.to_string())),
-                    }
-                }
-            }
-            Connection::Tls(stream) => {
-                loop {
-                    match stream.read(&mut buffer).await {
-                        Ok(0) => break, // Connection closed
-                        Ok(n) => response_data.extend_from_slice(&buffer[..n]),
-                        Err(e) => {
-                            // Ignore EOF errors that mention close_notify
-                            if e.to_string().contains("close_notify") {
-                                break;
-                            }
-                            return Err(NetworkError::ReceiveFailed(e.to_string()));
-                        }
-                    }
-                }
-            }
-        }
+        // Read response with keep-alive support: don't wait for EOF,
+        // instead read headers first, then read exact body length.
+        let response_data = self.read_response().await?;
 
         if response_data.is_empty() {
             return Err(NetworkError::ReceiveFailed(
@@ -124,6 +106,133 @@ impl TcpConnection {
         }
 
         self.parse_response(response_data)
+    }
+
+    /// Read an HTTP response, handling both keep-alive and close connections.
+    async fn read_response(&mut self) -> Result<Vec<u8>, NetworkError> {
+        let mut data = Vec::new();
+        let mut buffer = [0u8; 8192];
+
+        // First, read until we have the full headers
+        let header_end = loop {
+            let n = self.read_some(&mut buffer).await?;
+            if n == 0 {
+                // Connection closed before headers complete
+                break find_header_end(&data).unwrap_or(data.len());
+            }
+            data.extend_from_slice(&buffer[..n]);
+            if let Some(end) = find_header_end(&data) {
+                break end;
+            }
+        };
+
+        // Parse headers to determine body length strategy
+        let header_str = String::from_utf8_lossy(&data[..header_end]);
+        let mut content_length: Option<usize> = None;
+        let mut is_chunked = false;
+        let mut connection_close = false;
+
+        for line in header_str.split("\r\n").skip(1) {
+            if line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                let name_lower = name.trim().to_lowercase();
+                let value_trim = value.trim();
+                match name_lower.as_str() {
+                    "content-length" => {
+                        content_length = value_trim.parse().ok();
+                    }
+                    "transfer-encoding" => {
+                        is_chunked = value_trim
+                            .split(',')
+                            .any(|v| v.trim().eq_ignore_ascii_case("chunked"));
+                    }
+                    "connection" => {
+                        connection_close = value_trim.eq_ignore_ascii_case("close");
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Update keep-alive status
+        self.keep_alive = !connection_close;
+
+        // Now read the body
+        let body_start = header_end;
+
+        if is_chunked {
+            // For chunked, we need to read until we see the terminating chunk (0\r\n\r\n)
+            while !data.ends_with(b"0\r\n\r\n") && !data.ends_with(b"\r\n0\r\n\r\n") {
+                let n = self.read_some(&mut buffer).await?;
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buffer[..n]);
+                // Safety check for very large responses
+                if data.len() > Self::MAX_DECODED_BODY_BYTES + 1024 * 1024 {
+                    break;
+                }
+            }
+        } else if let Some(len) = content_length {
+            // Read exactly len bytes for the body
+            let target = body_start + len;
+            while data.len() < target {
+                let n = self.read_some(&mut buffer).await?;
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buffer[..n]);
+            }
+        } else if connection_close {
+            // No Content-Length and not chunked, but Connection: close - read until EOF
+            loop {
+                let n = self.read_some(&mut buffer).await?;
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buffer[..n]);
+            }
+            self.keep_alive = false;
+        } else {
+            // No Content-Length, not chunked, and keep-alive - this is malformed.
+            // For HTTP/1.1 keep-alive, server MUST send Content-Length or chunked.
+            // Assume zero-length body and mark connection as non-reusable.
+            log::warn!(target: "network", "Keep-alive response missing Content-Length/chunked, assuming empty body");
+            self.keep_alive = false;
+        }
+
+        Ok(data)
+    }
+
+    /// Read from the underlying stream with timeout, returning bytes read or 0 on EOF.
+    async fn read_some(&mut self, buffer: &mut [u8]) -> Result<usize, NetworkError> {
+        const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        
+        let read_future = async {
+            match &mut self.connection {
+                Connection::Plain(stream) => stream
+                    .read(buffer)
+                    .await
+                    .map_err(|e| NetworkError::ReceiveFailed(e.to_string())),
+                Connection::Tls(stream) => match stream.read(buffer).await {
+                    Ok(n) => Ok(n),
+                    Err(e) => {
+                        // TLS close_notify is expected EOF
+                        if e.to_string().contains("close_notify") {
+                            Ok(0)
+                        } else {
+                            Err(NetworkError::ReceiveFailed(e.to_string()))
+                        }
+                    }
+                },
+            }
+        };
+
+        tokio::time::timeout(READ_TIMEOUT, read_future)
+            .await
+            .map_err(|_| NetworkError::Timeout("Read timed out".to_string()))?
     }
 
     fn parse_response(&self, data: Vec<u8>) -> Result<http::Response, NetworkError> {
@@ -169,7 +278,7 @@ impl TcpConnection {
             let (name, value) = line.split_once(':').ok_or_else(|| {
                 NetworkError::HeaderParseError(format!("Invalid header line: {line}"))
             })?;
-            headers.insert(name.trim().to_string(), value.trim().to_string());
+            headers.append(name.trim().to_string(), value.trim().to_string());
         }
 
         let mut body = data[header_end..].to_vec();
@@ -186,6 +295,9 @@ impl TcpConnection {
             }
         }
 
+        // Decompress Content-Encoding: gzip or deflate
+        body = decompress_body(&headers, body)?;
+
         Ok(http::Response {
             version,
             status: http::Status {
@@ -195,6 +307,38 @@ impl TcpConnection {
             headers,
             body,
         })
+    }
+}
+
+fn decompress_body(headers: &http::Headers, body: Vec<u8>) -> Result<Vec<u8>, NetworkError> {
+    let Some(encoding) = headers.get("content-encoding") else {
+        return Ok(body);
+    };
+
+    let encoding = encoding.trim().to_lowercase();
+    match encoding.as_str() {
+        "gzip" | "x-gzip" => {
+            let mut decoder = GzDecoder::new(&body[..]);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .map_err(|e| NetworkError::ParseError(format!("gzip decompression failed: {e}")))?;
+            Ok(decompressed)
+        }
+        "deflate" => {
+            let mut decoder = DeflateDecoder::new(&body[..]);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .map_err(|e| NetworkError::ParseError(format!("deflate decompression failed: {e}")))?;
+            Ok(decompressed)
+        }
+        "identity" | "" => Ok(body),
+        other => {
+            // Unknown encoding, return body as-is and log warning
+            log::warn!(target: "network", "Unknown Content-Encoding: {}, returning raw body", other);
+            Ok(body)
+        }
     }
 }
 

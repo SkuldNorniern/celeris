@@ -18,8 +18,10 @@ pub struct Request {
     body: Vec<u8>,
 }
 
+/// HTTP headers storage. Supports multiple values per header name
+/// (required for Set-Cookie and other headers that can appear multiple times).
 #[derive(Debug, Clone)]
-pub struct Headers(HashMap<String, String>);
+pub struct Headers(HashMap<String, Vec<String>>);
 
 #[derive(Debug)]
 pub enum Method {
@@ -126,15 +128,31 @@ impl Headers {
         Self(HashMap::new())
     }
 
+    /// Insert a header value. For request headers, this replaces any existing value.
     pub fn insert(&mut self, name: String, value: String) {
-        self.0.insert(name.to_lowercase(), value);
+        self.0.insert(name.to_lowercase(), vec![value]);
     }
 
+    /// Append a header value (used for response parsing where headers can repeat).
+    pub fn append(&mut self, name: String, value: String) {
+        self.0
+            .entry(name.to_lowercase())
+            .or_default()
+            .push(value);
+    }
+
+    /// Get the first value for a header (most common case).
     pub fn get(&self, name: &str) -> Option<&String> {
+        self.0.get(&name.to_lowercase()).and_then(|v| v.first())
+    }
+
+    /// Get all values for a header (for Set-Cookie, etc.).
+    pub fn get_all(&self, name: &str) -> Option<&Vec<String>> {
         self.0.get(&name.to_lowercase())
     }
 
+    /// Iterate over headers. For multi-value headers, yields each value separately.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
-        self.0.iter()
+        self.0.iter().flat_map(|(k, vs)| vs.iter().map(move |v| (k, v)))
     }
 }
