@@ -31,6 +31,7 @@ impl JavaScriptEngine {
     }
 
     pub fn bind_dom(&mut self, dom: &crate::dom::Node) -> Result<(), Box<dyn Error>> {
+        self.runtime.bind_dom(dom);
         self.dom_bridge.bind_dom(dom)
     }
 

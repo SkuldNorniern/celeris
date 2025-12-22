@@ -4,12 +4,32 @@ use log::{debug, warn};
 pub enum Token {
     // Keywords
     Let,
+    Const,
+    Var,
     Function,
     If,
     Else,
     While,
+    For,
+    In,     // for...in
+    Of,     // for...of
     Return,
     New,
+    True,
+    False,
+    Null,
+    Undefined,
+    Typeof,
+    This,
+    Try,
+    Catch,
+    Finally,
+    Throw,
+    Break,
+    Continue,
+    Instanceof,
+    Delete,
+    Void,
     
     // Literals
     Number(f64),
@@ -21,13 +41,29 @@ pub enum Token {
     Minus,
     Star,
     Slash,
+    Percent,           // %
     Equals,
-    DoubleEquals,
+    DoubleEquals,      // ==
+    TripleEquals,      // ===
+    NotEquals,         // !=
+    NotDoubleEquals,   // !==
+    LessThan,          // <
+    GreaterThan,       // >
+    LessThanEquals,    // <=
+    GreaterThanEquals, // >=
+    Bang,              // !
+    Ampersand,         // &
+    DoubleAmpersand,   // &&
+    Pipe,              // |
+    DoublePipe,        // ||
+    Question,          // ?
     Dot,
-    Pipe,
-    DoublePipe,
     LeftBracket,
     RightBracket,
+    PlusEquals,        // +=
+    MinusEquals,       // -=
+    PlusPlus,          // ++
+    MinusMinus,        // --
     
     // Punctuation
     LeftParen,
@@ -37,6 +73,7 @@ pub enum Token {
     Semicolon,
     Comma,
     Colon,
+    Arrow,  // =>
     
     EOF,
 }
@@ -115,12 +152,32 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                 
                 let token = match ident.as_str() {
                     "let" => Token::Let,
+                    "const" => Token::Const,
+                    "var" => Token::Var,
                     "function" => Token::Function,
                     "if" => Token::If,
                     "else" => Token::Else,
                     "while" => Token::While,
+                    "for" => Token::For,
+                    "in" => Token::In,
+                    "of" => Token::Of,
                     "return" => Token::Return,
                     "new" => Token::New,
+                    "true" => Token::True,
+                    "false" => Token::False,
+                    "null" => Token::Null,
+                    "undefined" => Token::Undefined,
+                    "typeof" => Token::Typeof,
+                    "this" => Token::This,
+                    "try" => Token::Try,
+                    "catch" => Token::Catch,
+                    "finally" => Token::Finally,
+                    "throw" => Token::Throw,
+                    "break" => Token::Break,
+                    "continue" => Token::Continue,
+                    "instanceof" => Token::Instanceof,
+                    "delete" => Token::Delete,
+                    "void" => Token::Void,
                     _ => Token::Identifier(ident.clone()),
                 };
                 debug!(target: "javascript", "Found identifier/keyword: {} -> {:?}", ident, token);
@@ -128,15 +185,80 @@ pub fn tokenize(source: &str) -> Vec<Token> {
             },
             
             // Operators and punctuation
-            '+' | '-' | '*' | '/' | '(' | ')' | '{' | '}' | ';' | ',' | '=' | '.' | '|' | '[' | ']' | ':' => {
+            '+' | '-' | '*' | '/' | '%' | '(' | ')' | '{' | '}' | ';' | ',' | '=' | '.' | '|' | '&' | '[' | ']' | ':' | '<' | '>' | '!' | '?' => {
                 let token = match c {
                     '+' => {
                         chars.next();
-                        Token::Plus
+                        if chars.peek() == Some(&'+') {
+                            chars.next();
+                            Token::PlusPlus
+                        } else if chars.peek() == Some(&'=') {
+                            chars.next();
+                            Token::PlusEquals
+                        } else {
+                            Token::Plus
+                        }
                     },
                     '-' => {
                         chars.next();
-                        Token::Minus
+                        if chars.peek() == Some(&'-') {
+                            chars.next();
+                            Token::MinusMinus
+                        } else if chars.peek() == Some(&'=') {
+                            chars.next();
+                            Token::MinusEquals
+                        } else {
+                            Token::Minus
+                        }
+                    },
+                    '%' => {
+                        chars.next();
+                        Token::Percent
+                    },
+                    '<' => {
+                        chars.next();
+                        if chars.peek() == Some(&'=') {
+                            chars.next();
+                            Token::LessThanEquals
+                        } else {
+                            Token::LessThan
+                        }
+                    },
+                    '>' => {
+                        chars.next();
+                        if chars.peek() == Some(&'=') {
+                            chars.next();
+                            Token::GreaterThanEquals
+                        } else {
+                            Token::GreaterThan
+                        }
+                    },
+                    '!' => {
+                        chars.next();
+                        if chars.peek() == Some(&'=') {
+                            chars.next();
+                            if chars.peek() == Some(&'=') {
+                                chars.next();
+                                Token::NotDoubleEquals
+                            } else {
+                                Token::NotEquals
+                            }
+                        } else {
+                            Token::Bang
+                        }
+                    },
+                    '&' => {
+                        chars.next();
+                        if chars.peek() == Some(&'&') {
+                            chars.next();
+                            Token::DoubleAmpersand
+                        } else {
+                            Token::Ampersand
+                        }
+                    },
+                    '?' => {
+                        chars.next();
+                        Token::Question
                     },
                     '*' => {
                         chars.next();
@@ -200,7 +322,15 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                         chars.next();
                         if chars.peek() == Some(&'=') {
                             chars.next();
-                            Token::DoubleEquals
+                            if chars.peek() == Some(&'=') {
+                                chars.next();
+                                Token::TripleEquals
+                            } else {
+                                Token::DoubleEquals
+                            }
+                        } else if chars.peek() == Some(&'>') {
+                            chars.next();
+                            Token::Arrow
                         } else {
                             Token::Equals
                         }

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 use super::ast::Node;
-use super::runtime::Scope;
 
 #[derive(Debug, Clone)]
 pub enum JsValue {
@@ -12,7 +11,8 @@ pub enum JsValue {
     Number(f64),
     String(String),
     Object(Rc<RefCell<JsObject>>),
-    Function(JsFunction),
+    Function(Rc<JsUserFunction>),
+    NativeFunction(String), // Built-in functions like console.log
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +31,10 @@ impl JsObject {
 
     pub fn set_property(&mut self, name: String, value: JsValue) {
         self.properties.insert(name, value);
+    }
+
+    pub fn set(&mut self, name: &str, value: JsValue) {
+        self.properties.insert(name.to_string(), value);
     }
 
     pub fn get_property(&self, name: &str) -> Option<&JsValue> {
@@ -66,12 +70,23 @@ impl JsObject {
             }
         }
     }
+    
+    /// Get all property keys
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.properties.keys()
+    }
 }
 
+/// User-defined JavaScript function
 #[derive(Debug, Clone)]
-pub struct JsFunction {
-    name: Option<String>,
-    params: Vec<String>,
-    body: Vec<Node>,
-    closure: Scope,
+pub struct JsUserFunction {
+    pub name: Option<String>,
+    pub params: Vec<String>,
+    pub body: Vec<Node>,
+}
+
+impl JsUserFunction {
+    pub fn new(name: Option<String>, params: Vec<String>, body: Vec<Node>) -> Self {
+        Self { name, params, body }
+    }
 } 
