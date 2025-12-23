@@ -68,6 +68,71 @@ impl Node {
     pub fn children(&self) -> &[Node] {
         &self.children
     }
+    
+    pub fn children_mut(&mut self) -> &mut Vec<Node> {
+        &mut self.children
+    }
+    
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+    
+    pub fn set_text_content(&mut self, text: &str) {
+        // Clear children and add a single text node
+        self.children.clear();
+        self.children.push(Node::new(NodeType::Text(text.to_string())));
+    }
+    
+    pub fn set_inner_html(&mut self, html: &str) {
+        // Parse HTML and set as children
+        // For now, if it looks like HTML (contains <), try to parse it
+        // Otherwise, treat as text
+        if html.contains('<') {
+            // Try to parse as HTML fragment
+            // Wrap in a container to ensure proper parsing
+            let wrapped_html = format!("<div>{}</div>", html);
+            let mut parser = crate::html::parser::Parser::new(wrapped_html);
+            let dom = parser.parse();
+            if let Some(root) = dom.root() {
+                // Find the wrapper div and get its children
+                if let Some(wrapper) = root.children().first() {
+                    // Use the wrapper's children as our new children
+                    self.children = wrapper.children().to_vec();
+                } else {
+                    // Fallback to text if parsing fails
+                    self.children.clear();
+                    self.children.push(Node::new(NodeType::Text(html.to_string())));
+                }
+            } else {
+                // Fallback to text if parsing fails
+                self.children.clear();
+                self.children.push(Node::new(NodeType::Text(html.to_string())));
+            }
+        } else {
+            // Plain text
+            self.set_text_content(html);
+        }
+    }
+    
+    // Find and modify a child element by ID
+    // Returns true if the element was found and modified
+    pub fn find_and_modify_child_by_id(&mut self, id: &str) -> Option<&mut Node> {
+        // Check if this node has the ID
+        if let Some(node_id) = self.get_attribute("id") {
+            if node_id == id {
+                return Some(self);
+            }
+        }
+        
+        // Search children
+        for child in &mut self.children {
+            if let Some(found) = child.find_and_modify_child_by_id(id) {
+                return Some(found);
+            }
+        }
+        
+        None
+    }
 
     pub fn get_attribute(&self, name: &str) -> Option<&str> {
         match &self.node_type {

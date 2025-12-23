@@ -1425,7 +1425,9 @@ impl Parser {
                         debug!(target: "javascript", "Parsing function arguments");
                         loop {
                             debug!(target: "javascript", "Parsing argument, current token: {:?}", self.peek());
-                            let arg = self.parse_expression()?;
+                            // Use parse_assignment() instead of parse_expression() to avoid comma operator
+                            // The comma between arguments is handled by this loop, not by the expression parser
+                            let arg = self.parse_assignment()?;
                             
                             // Check if the next token might be part of a member access that wasn't fully parsed
                             // This can happen with minified code or complex expressions
@@ -1503,7 +1505,11 @@ impl Parser {
                         }
                     }
                     
-                    debug!(target: "javascript", "Completed function call with {} arguments", arguments.len());
+                    log::info!(target: "javascript", "Parser: Completed function call with {} arguments", arguments.len());
+                    for (i, arg) in arguments.iter().enumerate() {
+                        let is_func = matches!(arg, Node::FunctionExpr { .. });
+                        log::info!(target: "javascript", "Parser: Argument {} is FunctionExpr: {}", i, is_func);
+                    }
                     expr = Node::CallExpr {
                         callee: Box::new(expr),
                         arguments,
