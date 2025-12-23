@@ -1,5 +1,6 @@
 use super::{DisplayList, DisplayItem};
 use crate::css::style::StyledNode;
+use crate::html::entities;
 use std::collections::HashMap;
 
 pub struct LayoutEngine {
@@ -53,32 +54,112 @@ impl LayoutEngine {
     }
 
     pub fn compute_layout(&mut self, styled_node: &StyledNode) -> DisplayList {
+        log::info!(target: "layout", "Starting layout computation");
         let mut display_list = DisplayList::new();
-        self.layout_node(styled_node, 0.0, 0.0, &mut display_list);
+        let _height = self.layout_node(styled_node, 0.0, 0.0, &mut display_list);
+        log::info!(target: "layout", "Layout complete, created {} display items", display_list.items().len());
         display_list
     }
 
-    fn layout_node(&mut self, node: &StyledNode, x: f32, y: f32, display_list: &mut DisplayList) {
+    fn layout_node(&mut self, node: &StyledNode, x: f32, y: f32, display_list: &mut DisplayList) -> f32 {
+        // Handle special elements first (img, button, input) regardless of display type
+        if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
+            match tag_name.as_str() {
+                "img" => {
+                    let img_url = node.node.get_attribute("src").unwrap_or("").to_string();
+                    let alt_text = node.node.get_attribute("alt").unwrap_or("").to_string();
+                    let img_width = node.node.get_attribute("width")
+                        .and_then(|w| w.parse::<f32>().ok())
+                        .unwrap_or(100.0);
+                    let img_height = node.node.get_attribute("height")
+                        .and_then(|h| h.parse::<f32>().ok())
+                        .unwrap_or(100.0);
+                    
+                    log::debug!(target: "layout", "Found img element: src={}, alt={}, size={}x{}", img_url, alt_text, img_width, img_height);
+                    
+                    display_list.add_item(DisplayItem::Image {
+                        url: img_url,
+                        x,
+                        y,
+                        width: img_width,
+                        height: img_height,
+                        alt: alt_text,
+                    });
+                    return img_height; // Return height for parent to track
+                }
+                "button" | "input" => {
+                    let button_text = if tag_name == "button" {
+                        // Extract text from button children
+                        let mut text = String::new();
+                        for child in node.node.children() {
+                            if let crate::dom::NodeType::Text(t) = child.node_type() {
+                                text.push_str(t.trim());
+                            }
+                        }
+                        if text.is_empty() {
+                            node.node.get_attribute("value").unwrap_or("Button").to_string()
+                        } else {
+                            text
+                        }
+                    } else {
+                        // input element
+                        node.node.get_attribute("value")
+                            .or_else(|| node.node.get_attribute("placeholder"))
+                            .unwrap_or("Input")
+                            .to_string()
+                    };
+                    
+                    log::debug!(target: "layout", "Found {} element: text={}", tag_name, button_text);
+                    
+                    let button_width = 120.0;
+                    let button_height = 32.0;
+                    
+                    display_list.add_item(DisplayItem::Button {
+                        text: button_text,
+                        x,
+                        y,
+                        width: button_width,
+                        height: button_height,
+                    });
+                    return button_height; // Return height for parent to track
+                }
+                _ => {}
+            }
+        }
+        
         // Basic layout algorithm - expand as needed
         let computed = self.compute_style(node);
         
         match computed.display {
             Display::Block => {
                 // Handle block layout
-                self.layout_block(node, x, y, &computed, display_list);
+                self.layout_block(node, x, y, &computed, display_list)
             },
             Display::Inline => {
                 // Handle inline layout
-                self.layout_inline(node, x, y, &computed, display_list);
+                self.layout_inline(node, x, y, &computed, display_list)
             },
-            Display::None => {},
+            Display::None => 0.0,
         }
     }
 
     fn compute_style(&self, node: &StyledNode) -> ComputedStyle {
-        // Basic style computation - expand as needed
+        // Determine display type based on element
+        let display = if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
+            match tag_name.as_str() {
+                "div" | "section" | "article" | "header" | "footer" | "main" | "body" | "html" | 
+                "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | 
+                "blockquote" | "nav" | "aside" | "form" | "table" | "tr" | "td" | "th" => Display::Block,
+                "span" | "a" | "strong" | "em" | "b" | "i" | "u" | "code" | "small" | "sub" | "sup" => Display::Inline,
+                "img" | "button" | "input" => Display::Inline, // These are handled specially but default to inline
+                _ => Display::Block,
+            }
+        } else {
+            Display::Block
+        };
+        
         ComputedStyle {
-            display: Display::Block,
+            display,
             position: Position::Static,
             width: Dimension::Auto,
             height: Dimension::Auto,
@@ -97,7 +178,7 @@ impl LayoutEngine {
         }
     }
 
-    fn layout_block(&mut self, node: &StyledNode, x: f32, y: f32, _style: &ComputedStyle, display_list: &mut DisplayList) {
+    fn layout_block(&mut self, node: &StyledNode, x: f32, y: f32, _style: &ComputedStyle, display_list: &mut DisplayList) -> f32 {
         let mut current_y = y;
         let padding = 10.0;
         let line_height = 24.0;
@@ -107,29 +188,40 @@ impl LayoutEngine {
         // Skip non-content elements
         if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
             if matches!(tag_name.as_str(), "script" | "style" | "meta" | "link" | "head" | "title") {
-                return;
+                return 0.0;
             }
         }
         
         // Layout children first to calculate block dimensions
         let mut has_children = false;
+        let mut max_child_height: f32 = 0.0;
+        
         for child in node.node.children() {
             let styled_child = crate::css::style::StyledNode::new(child.clone());
-            let child_computed = self.compute_style(&styled_child);
+            let child_height: f32 = self.layout_node(&styled_child, x + padding, current_y, display_list);
             
-            match child_computed.display {
-                Display::Block => {
-                    has_children = true;
-                    self.layout_block(&styled_child, x + padding, current_y + margin, &child_computed, display_list);
-                    current_y += line_height + margin;
+            if child_height > 0.0 {
+                has_children = true;
+                max_child_height = max_child_height.max(child_height);
+                current_y += child_height + margin;
+            } else {
+                // Fallback for elements that don't return height
+                let child_computed = self.compute_style(&styled_child);
+                match child_computed.display {
+                    Display::Block => {
+                        has_children = true;
+                        let h: f32 = self.layout_block(&styled_child, x + padding, current_y, &child_computed, display_list);
+                        current_y += h.max(line_height) + margin;
+                        max_child_height = max_child_height.max(h);
+                    }
+                    Display::Inline => {
+                        has_children = true;
+                        let h: f32 = self.layout_inline(&styled_child, x + padding, current_y, &child_computed, display_list);
+                        current_y += h.max(line_height) + margin;
+                        max_child_height = max_child_height.max(h);
+                    }
+                    Display::None => {}
                 }
-                Display::Inline => {
-                    has_children = true;
-                    let text_y = current_y;
-                    self.layout_inline(&styled_child, x + padding, text_y, &child_computed, display_list);
-                    current_y += line_height;
-                }
-                Display::None => {}
             }
         }
         
@@ -138,12 +230,17 @@ impl LayoutEngine {
             crate::dom::NodeType::Text(text) => {
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    display_list.add_item(DisplayItem::Text {
-                        content: trimmed.to_string(),
-                        x: x + padding,
-                        y,
-                        color: super::Color { r: 0, g: 0, b: 0, a: 255 },
-                    });
+                    let decoded = entities::decode_html_entities(trimmed);
+                    if !decoded.trim().is_empty() {
+                        display_list.add_item(DisplayItem::Text {
+                            content: decoded,
+                            x: x + padding,
+                            y: current_y, // Use current_y instead of y for proper positioning
+                            color: super::Color { r: 0, g: 0, b: 0, a: 255 },
+                        });
+                        // Update current_y for text
+                        current_y += line_height;
+                    }
                 }
             }
             crate::dom::NodeType::Element { tag_name, .. } => {
@@ -172,26 +269,40 @@ impl LayoutEngine {
             }
             _ => {}
         }
+        
+        // Return the height of this block
+        let block_height = if has_children && current_y > block_start_y {
+            current_y - block_start_y
+        } else {
+            line_height
+        };
+        block_height
     }
 
-    fn layout_inline(&mut self, node: &StyledNode, x: f32, y: f32, _style: &ComputedStyle, display_list: &mut DisplayList) {
+    fn layout_inline(&mut self, node: &StyledNode, x: f32, y: f32, _style: &ComputedStyle, display_list: &mut DisplayList) -> f32 {
+        let line_height = 24.0;
+        
         // Extract text content from text nodes
         match node.node.node_type() {
             crate::dom::NodeType::Text(text) => {
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    display_list.add_item(DisplayItem::Text {
-                        content: trimmed.to_string(),
-                        x,
-                        y,
-                        color: super::Color { r: 0, g: 0, b: 0, a: 255 },
-                    });
+                    let decoded = entities::decode_html_entities(trimmed);
+                    if !decoded.trim().is_empty() {
+                        display_list.add_item(DisplayItem::Text {
+                            content: decoded,
+                            x,
+                            y,
+                            color: super::Color { r: 0, g: 0, b: 0, a: 255 },
+                        });
+                    }
                 }
+                return line_height;
             }
             crate::dom::NodeType::Element { tag_name, .. } => {
                 // Skip non-content elements
                 if matches!(tag_name.as_str(), "script" | "style" | "meta" | "link" | "head" | "title") {
-                    return;
+                    return 0.0;
                 }
                 
                 // Create rectangles for inline block elements
@@ -223,6 +334,8 @@ impl LayoutEngine {
                 // Layout children inline with proper spacing
                 let mut current_x = x;
                 let char_width = 8.0;
+                let line_height: f32 = 24.0;
+                let mut max_height: f32 = line_height;
                 
                 for child in node.node.children() {
                     let styled_child = crate::css::style::StyledNode::new(child.clone());
@@ -232,23 +345,33 @@ impl LayoutEngine {
                         crate::dom::NodeType::Text(text) => {
                             let trimmed = text.trim();
                             if !trimmed.is_empty() {
-                                display_list.add_item(DisplayItem::Text {
-                                    content: trimmed.to_string(),
-                                    x: current_x,
-                                    y,
-                                    color: super::Color { r: 0, g: 0, b: 0, a: 255 },
-                                });
-                                current_x += trimmed.len() as f32 * char_width;
+                                let decoded = entities::decode_html_entities(trimmed);
+                                if !decoded.trim().is_empty() {
+                                    display_list.add_item(DisplayItem::Text {
+                                        content: decoded.clone(),
+                                        x: current_x,
+                                        y,
+                                        color: super::Color { r: 0, g: 0, b: 0, a: 255 },
+                                    });
+                                    current_x += decoded.len() as f32 * char_width;
+                                }
                             }
                         }
                         _ => {
-                            self.layout_inline(&styled_child, current_x, y, &child_computed, display_list);
-                            current_x += 10.0;
+                            let child_height: f32 = self.layout_inline(&styled_child, current_x, y, &child_computed, display_list);
+                            max_height = max_height.max(child_height);
+                            // Estimate width for inline elements
+                            current_x += 50.0; // Space for inline elements
                         }
                     }
                 }
+                
+                return max_height;
             }
             _ => {}
         }
+        
+        // Return the height of inline content (typically line height)
+        24.0
     }
 } 

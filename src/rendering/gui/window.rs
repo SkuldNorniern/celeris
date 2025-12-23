@@ -77,11 +77,19 @@ impl BrowserWindow {
                 match browser.load_url(&url_clone).await {
                     Ok((display_list, content)) => {
                         log::info!(target: "browser", "Successfully loaded URL: {}", url_clone);
-                        let _ = tx.send(LoadResult::Success { content, display_list });
+                        log::info!(target: "browser", "Display list has {} items, content length: {}", 
+                            display_list.items().len(), content.len());
+                        match tx.send(LoadResult::Success { content, display_list }) {
+                            Ok(_) => log::info!(target: "browser", "Sent success result to UI thread"),
+                            Err(e) => log::error!(target: "browser", "Failed to send result: {}", e),
+                        }
                     }
                     Err(e) => {
                         log::error!(target: "browser", "Failed to load URL {}: {}", url_clone, e);
-                        let _ = tx.send(LoadResult::Error(format!("Error loading page: {}", e)));
+                        match tx.send(LoadResult::Error(format!("Error loading page: {}", e))) {
+                            Ok(_) => log::info!(target: "browser", "Sent error result to UI thread"),
+                            Err(send_err) => log::error!(target: "browser", "Failed to send error: {}", send_err),
+                        }
                     }
                 }
             });
@@ -93,21 +101,34 @@ impl Render for BrowserWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Check for load results from background thread
         if let Some(ref rx) = self.load_result_rx {
-            if let Ok(result) = rx.try_recv() {
-                match result {
-                    LoadResult::Success { content, display_list } => {
-                        self.content_view.update(cx, |cv, _cx| {
-                            cv.set_display_list(display_list);
-                            cv.set_page_content(&content);
-                        });
+            match rx.try_recv() {
+                Ok(result) => {
+                    log::info!(target: "browser", "Received load result in render");
+                    match result {
+                        LoadResult::Success { content, display_list } => {
+                            log::info!(target: "browser", "Load success: content len={}, display_list items={}", 
+                                content.len(), display_list.items().len());
+                            self.content_view.update(cx, |cv, _cx| {
+                                cv.set_display_list(display_list);
+                                cv.set_page_content(&content);
+                            });
+                        }
+                        LoadResult::Error(err) => {
+                            log::error!(target: "browser", "Load error: {}", err);
+                            self.content_view.update(cx, |cv, _cx| {
+                                cv.set_loading(&err);
+                            });
+                        }
                     }
-                    LoadResult::Error(err) => {
-                        self.content_view.update(cx, |cv, _cx| {
-                            cv.set_loading(&err);
-                        });
-                    }
+                    self.load_result_rx = None;
                 }
-                self.load_result_rx = None;
+                Err(mpsc::TryRecvError::Empty) => {
+                    // No message yet, this is normal
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    log::warn!(target: "browser", "Load result channel disconnected");
+                    self.load_result_rx = None;
+                }
             }
         }
         

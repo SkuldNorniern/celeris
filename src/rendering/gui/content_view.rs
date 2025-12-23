@@ -33,6 +33,17 @@ impl ContentView {
     }
 
     pub fn set_display_list(&mut self, display_list: DisplayList) {
+        log::info!(target: "content_view", "Setting display list with {} items", display_list.items().len());
+        let item_counts = display_list.items().iter().fold((0, 0, 0, 0), |(text, rect, img, btn), item| {
+            match item {
+                DisplayItem::Text { .. } => (text + 1, rect, img, btn),
+                DisplayItem::Rectangle { .. } => (text, rect + 1, img, btn),
+                DisplayItem::Image { .. } => (text, rect, img + 1, btn),
+                DisplayItem::Button { .. } => (text, rect, img, btn + 1),
+            }
+        });
+        log::info!(target: "content_view", "Display list breakdown: {} text, {} rects, {} images, {} buttons", 
+            item_counts.0, item_counts.1, item_counts.2, item_counts.3);
         self.display_list = Some(display_list);
         self.loaded = true;
     }
@@ -50,6 +61,7 @@ impl ContentView {
 impl gpui::Render for ContentView {
     fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
         if !self.loaded {
+            log::debug!(target: "content_view", "Rendering loading state: {}", self.loading_text);
             return div()
                 .size_full()
                 .flex()
@@ -62,6 +74,7 @@ impl gpui::Render for ContentView {
         // Render display list items if available
         if let Some(ref display_list) = self.display_list {
             let items = display_list.items();
+            log::debug!(target: "content_view", "Rendering display list with {} items", items.len());
             if !items.is_empty() {
                 let mut container = div()
                     .size_full()
@@ -87,9 +100,70 @@ impl gpui::Render for ContentView {
                     }
                 }
                 
+                // Render images (as placeholder boxes with alt text)
+                for item in items {
+                    if let DisplayItem::Image { url: _, x, y, width, height, alt } = item {
+                        container = container.child(
+                            div()
+                                .absolute()
+                                .left(px(*x))
+                                .top(px(*y))
+                                .w(px(*width))
+                                .h(px(*height))
+                                .bg(gpui::rgb(0xf0f0f0))
+                                .border(px(1.0))
+                                .border_color(gpui::rgb(0xcccccc))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(gpui::rgb(0x666666))
+                                .text_xs()
+                                .child(if alt.is_empty() {
+                                    "[Image]".to_string()
+                                } else {
+                                    format!("[{}]", alt)
+                                })
+                        );
+                    }
+                }
+                
+                // Render buttons
+                for item in items {
+                    if let DisplayItem::Button { text, x, y, width, height } = item {
+                        container = container.child(
+                            div()
+                                .absolute()
+                                .left(px(*x))
+                                .top(px(*y))
+                                .w(px(*width))
+                                .h(px(*height))
+                                .bg(gpui::rgb(0x4285f4))
+                                .border(px(1.0))
+                                .border_color(gpui::rgb(0x357ae8))
+                                .rounded_md()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(gpui::rgb(0xffffff))
+                                .text_sm()
+                                .cursor_pointer()
+                                .hover(|style| {
+                                    style.bg(gpui::rgb(0x357ae8))
+                                })
+                                .child(text.clone())
+                        );
+                    }
+                }
+                
                 // Then render text on top
+                let mut text_count = 0;
                 for item in items {
                     if let DisplayItem::Text { content, x, y, color } = item {
+                        text_count += 1;
+                        if text_count <= 5 {
+                            log::debug!(target: "content_view", "Rendering text #{}: '{}' at ({}, {})", text_count, 
+                                content.chars().take(30).collect::<String>(), x, y);
+                        }
                         container = container.child(
                             div()
                                 .absolute()
@@ -100,6 +174,7 @@ impl gpui::Render for ContentView {
                         );
                     }
                 }
+                log::debug!(target: "content_view", "Rendered {} text items total", text_count);
                 
                 return container;
             }

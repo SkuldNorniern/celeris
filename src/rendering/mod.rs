@@ -44,6 +44,21 @@ pub enum DisplayItem {
         height: f32,
         color: Color,
     },
+    Image {
+        url: String,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        alt: String,
+    },
+    Button {
+        text: String,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
 }
 
 #[derive(Debug, Clone)]
