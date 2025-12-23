@@ -120,6 +120,25 @@ impl Browser {
             if let Err(e) = self.js_engine.runtime_mut().fire_dom_content_loaded() {
                 log::warn!(target: "browser", "Error firing DOMContentLoaded: {}", e);
             }
+            
+            // Explicitly call do_capabilities_detection if it exists
+            // This ensures the detection runs even if addEventListener didn't work
+            let detection_check = self.js_engine.evaluate("typeof do_capabilities_detection");
+            match detection_check {
+                Ok(ref val) => {
+                    // Check if it's a function by evaluating the function call
+                    let func_check = self.js_engine.evaluate("do_capabilities_detection");
+                    if func_check.is_ok() {
+                        log::info!(target: "browser", "Calling do_capabilities_detection() explicitly");
+                        if let Err(e) = self.js_engine.evaluate("do_capabilities_detection()") {
+                            log::warn!(target: "browser", "Error calling do_capabilities_detection: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::debug!(target: "browser", "Could not check do_capabilities_detection type: {}", e);
+                }
+            }
         }
         
         // Use the shared DOM root for rendering (may have been modified by JS)
@@ -196,7 +215,7 @@ impl Browser {
         self.extract_content(&*root);
         println!("\n{}", "=".repeat(50));
 
-        Ok((display_list, self.extract_text_content(root)))
+        Ok((display_list, self.extract_text_content(&*root)))
     }
     
     pub fn extract_text_content(&self, node: &dom::Node) -> String {
