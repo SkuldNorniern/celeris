@@ -34,7 +34,7 @@ impl Browser {
         })
     }
 
-    pub async fn load_url(&mut self, url: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn load_url(&mut self, url: &str) -> Result<(crate::rendering::DisplayList, String), Box<dyn Error>> {
         println!("\n[*] Loading: {}", url);
         info!(target: "browser", "Starting request for URL: {}", url);
 
@@ -115,7 +115,52 @@ impl Browser {
         self.extract_content(root);
         println!("\n{}", "=".repeat(50));
 
-        Ok(())
+        Ok((display_list, self.extract_text_content(root)))
+    }
+    
+    pub fn extract_text_content(&self, node: &dom::Node) -> String {
+        let mut text = String::new();
+        self.extract_text_content_recursive(node, &mut text);
+        text
+    }
+    
+    fn extract_text_content_recursive(&self, node: &dom::Node, text: &mut String) {
+        match node.node_type() {
+            dom::NodeType::Element { tag_name, .. } => {
+                // Skip non-content elements
+                if matches!(tag_name.as_str(), "script" | "style" | "meta" | "link" | "head") {
+                    return;
+                }
+                
+                // Process children
+                for child in node.children() {
+                    self.extract_text_content_recursive(child, text);
+                }
+                
+                // Add newlines after block elements
+                if matches!(
+                    tag_name.as_str(),
+                    "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" |
+                    "article" | "section" | "header" | "footer" | "br" |
+                    "ul" | "ol" | "li" | "table" | "tr" | "form"
+                ) {
+                    text.push('\n');
+                }
+            }
+            dom::NodeType::Text(content) => {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    let decoded = html::entities::decode_html_entities(trimmed);
+                    if !decoded.trim().is_empty() {
+                        if !text.is_empty() && !text.ends_with('\n') && !text.ends_with(' ') {
+                            text.push(' ');
+                        }
+                        text.push_str(&decoded);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn find_first_element<'a>(&self, node: &'a dom::Node, tag_name: &str) -> Option<&'a dom::Node> {
