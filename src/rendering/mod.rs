@@ -6,6 +6,7 @@ pub mod gui;
 
 pub mod layout;
 pub mod painter;
+pub mod tree;
 
 pub struct Renderer {
     headless: bool,
@@ -23,12 +24,12 @@ struct Painter {
     // Add rendering backend specific fields
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DisplayList {
     items: Vec<DisplayItem>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DisplayItem {
     Text {
         content: String,
@@ -45,7 +46,7 @@ pub enum DisplayItem {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Color {
     r: u8,
     g: u8,
@@ -104,5 +105,9 @@ impl DisplayList {
 
     pub fn items(&self) -> &[DisplayItem] {
         &self.items
+    }
+    
+    pub fn add_item(&mut self, item: DisplayItem) {
+        self.items.push(item);
     }
 }

@@ -1,5 +1,7 @@
 #[cfg(feature = "gui")]
-use gpui::{Application, WindowOptions};
+use gpui::{px, Application, WindowOptions, AppContext};
+#[cfg(feature = "gui")]
+use super::BrowserWindow;
 
 pub struct BrowserApp {
     browser: Option<crate::Browser>,
@@ -20,9 +22,38 @@ impl BrowserApp {
 
     #[cfg(feature = "gui")]
     pub fn run(self) {
-        Application::new().run(|_cx| {
-            // Window creation will be implemented once we determine the correct GPUI API
+        use super::address_bar::{Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Paste, Cut, Copy};
+        
+        Application::new().run(|cx| {
             log::info!(target: "browser", "Browser GUI application started");
+            
+            cx.bind_keys([
+                gpui::KeyBinding::new("backspace", Backspace, None),
+                gpui::KeyBinding::new("delete", Delete, None),
+                gpui::KeyBinding::new("left", Left, None),
+                gpui::KeyBinding::new("right", Right, None),
+                gpui::KeyBinding::new("shift-left", SelectLeft, None),
+                gpui::KeyBinding::new("shift-right", SelectRight, None),
+                gpui::KeyBinding::new("cmd-a", SelectAll, None),
+                gpui::KeyBinding::new("cmd-v", Paste, None),
+                gpui::KeyBinding::new("cmd-c", Copy, None),
+                gpui::KeyBinding::new("cmd-x", Cut, None),
+                gpui::KeyBinding::new("home", Home, None),
+                gpui::KeyBinding::new("end", End, None),
+                gpui::KeyBinding::new("enter", super::address_bar::Enter, None),
+            ]);
+            
+            let window_options = WindowOptions {
+                window_bounds: Some(gpui::WindowBounds::Windowed(
+                    gpui::Bounds::centered(None, gpui::size(px(1200.0), px(800.0)), cx)
+                )),
+                ..Default::default()
+            };
+            
+            let browser = self.browser;
+            cx.open_window(window_options, |_window, cx| {
+                cx.new(|cx| BrowserWindow::new(browser, cx))
+            }).ok();
         });
     }
 }
