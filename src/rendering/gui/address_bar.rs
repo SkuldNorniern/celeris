@@ -49,15 +49,38 @@ impl AddressBar {
         })
     }
     
-    pub fn on_enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
-        let url = self.content.to_string();
-        for window in cx.windows() {
-            if let Some(browser_window) = window.downcast::<super::window::BrowserWindow>() {
-                let _ = browser_window.update(cx, |bw, _window, cx| {
+    pub fn on_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        let url = self.content.to_string().trim().to_string();
+        if url.is_empty() {
+            log::warn!(target: "address_bar", "Enter pressed but URL is empty");
+            return;
+        }
+        
+        log::info!(target: "address_bar", "Enter pressed, loading URL: {}", url);
+        
+        // Try to find the browser window and load the URL
+        // Search through all windows to find the BrowserWindow
+        let mut found = false;
+        for window_handle in cx.windows() {
+            if let Some(browser_window) = window_handle.downcast::<super::window::BrowserWindow>() {
+                log::debug!(target: "address_bar", "Found browser window, calling load_url");
+                match browser_window.update(cx, |bw, _window, cx| {
                     bw.load_url(&url, cx);
-                });
-                break;
+                }) {
+                    Ok(_) => {
+                        found = true;
+                        log::info!(target: "address_bar", "Successfully called load_url");
+                        break;
+                    }
+                    Err(e) => {
+                        log::error!(target: "address_bar", "Failed to update browser window: {:?}", e);
+                    }
+                }
             }
+        }
+        
+        if !found {
+            log::error!(target: "address_bar", "Could not find browser window to load URL");
         }
     }
 

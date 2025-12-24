@@ -526,7 +526,8 @@ impl Runtime {
                         }
                     }
                     if name == "do_capabilities_detection" {
-                        log::warn!(target: "javascript", "Variable '{}' not found in scope or window", name);
+                        // This is expected - the function may not be defined yet, we'll create a stub
+                        debug!(target: "javascript", "Variable '{}' not found in scope or window (will be handled by browser)", name);
                     } else {
                         debug!(target: "javascript", "Variable not found: {}", name);
                     }
@@ -555,10 +556,16 @@ impl Runtime {
                 let mut arg_values = Vec::new();
                 for (i, arg) in arguments.iter().enumerate() {
                     let is_function_expr = matches!(arg, Node::FunctionExpr { .. });
-                    log::info!(target: "javascript", "Evaluating call argument {}: is_function_expr={}, node={:?}", i, is_function_expr, arg);
+                    // Detailed node information at trace level
+                    log::trace!(target: "javascript", "Evaluating call argument {}: is_function_expr={}, node={:?}", i, is_function_expr, arg);
                     let arg_val = self.evaluate_node(arg)?;
                     let is_function_value = matches!(&arg_val, JsValue::Function(_));
-                    log::info!(target: "javascript", "Call argument {} evaluated to: is_function={}, value={:?}", i, is_function_value, arg_val);
+                    // Detailed value information at trace level
+                    log::trace!(target: "javascript", "Call argument {} evaluated to: is_function={}, value={:?}", i, is_function_value, arg_val);
+                    // Simple summary at debug level
+                    if is_function_expr || is_function_value {
+                        debug!(target: "javascript", "Call argument {} is a function", i);
+                    }
                     arg_values.push(arg_val);
                 }
                 

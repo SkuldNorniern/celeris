@@ -40,7 +40,7 @@ pub struct DomTree {
 impl Node {
     pub fn new(node_type: NodeType) -> Self {
         let id = NODE_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        debug!(target: "dom", "Creating new node (id: {}): {:?}", id, node_type);
+        log::trace!(target: "dom", "Creating new node (id: {}): {:?}", id, node_type);
         Self {
             node_type,
             children: Vec::new(),
@@ -51,20 +51,20 @@ impl Node {
     pub fn add_child(&mut self, child: Node) {
         match &self.node_type {
             NodeType::Element { tag_name, .. } => {
-                debug!(target: "dom", "Adding child to <{}>: {:?}", tag_name, child.node_type);
-                debug!(target: "dom", "Current children count: {}", self.children.len());
+                log::trace!(target: "dom", "Adding child to <{}>: {:?}", tag_name, child.node_type);
+                log::trace!(target: "dom", "Current children count: {}", self.children.len());
             }
             NodeType::Text(text) => {
                 let preview = &text[..text.len().min(20)];
-                debug!(target: "dom", "Adding child to text node '{}': {:?}", preview, child.node_type);
+                log::trace!(target: "dom", "Adding child to text node '{}': {:?}", preview, child.node_type);
             }
             NodeType::Comment(comment) => {
                 let preview = &comment[..comment.len().min(20)];
-                debug!(target: "dom", "Adding child to comment '{}': {:?}", preview, child.node_type);
+                log::trace!(target: "dom", "Adding child to comment '{}': {:?}", preview, child.node_type);
             }
         }
         self.children.push(child);
-        debug!(target: "dom", "New children count: {}", self.children.len());
+        log::trace!(target: "dom", "New children count: {}", self.children.len());
     }
 
     pub fn node_type(&self) -> &NodeType {
@@ -151,7 +151,7 @@ impl Node {
                     .iter()
                     .find(|attr| attr.name == name)
                     .map(|attr| attr.value.as_str());
-                debug!(target: "dom", "Getting attribute '{}': {:?}", name, attr);
+                log::trace!(target: "dom", "Getting attribute '{}': {:?}", name, attr);
                 attr
             }
             _ => None,
@@ -162,7 +162,7 @@ impl Node {
         match &self.node_type {
             NodeType::Element { tag_name: t, .. } => {
                 let is_match = t == tag_name;
-                debug!(target: "dom", "Checking if node is <{}>: {}", tag_name, is_match);
+                log::trace!(target: "dom", "Checking if node is <{}>: {}", tag_name, is_match);
                 is_match
             }
             _ => false,
@@ -187,16 +187,16 @@ impl Node {
                 } else {
                     format!(" {}", attrs.join(" "))
                 };
-                debug!(target: "dom", "{}Element: <{}{}>", indent, tag_name, attrs_str);
-                debug!(target: "dom", "{}Children count: {}", indent, self.children.len());
+                log::trace!(target: "dom", "{}Element: <{}{}>", indent, tag_name, attrs_str);
+                log::trace!(target: "dom", "{}Children count: {}", indent, self.children.len());
             }
             NodeType::Text(text) => {
                 if !text.trim().is_empty() {
-                    debug!(target: "dom", "{}Text: {}", indent, text.trim());
+                    log::trace!(target: "dom", "{}Text: {}", indent, text.trim());
                 }
             }
             NodeType::Comment(comment) => {
-                debug!(target: "dom", "{}Comment: {}", indent, comment);
+                log::trace!(target: "dom", "{}Comment: {}", indent, comment);
             }
         }
 
@@ -205,7 +205,7 @@ impl Node {
         }
 
         if let NodeType::Element { tag_name, .. } = &self.node_type {
-            debug!(target: "dom", "{}</{}> (end)", indent, tag_name);
+            log::trace!(target: "dom", "{}</{}> (end)", indent, tag_name);
         }
     }
 
@@ -215,7 +215,7 @@ impl Node {
                 event_type: event_type.to_string(),
                 handler: handler.to_string(),
             });
-            debug!(target: "dom", "Added event listener for {}", event_type);
+            log::trace!(target: "dom", "Added event listener for {}", event_type);
         }
     }
 
@@ -239,7 +239,7 @@ impl DomTree {
 
     pub fn set_root(&mut self, node: Node) {
         info!(target: "dom", "Setting root node: {:?}", node.node_type);
-        debug!(target: "dom", "Root node children count: {}", node.children.len());
+        log::trace!(target: "dom", "Root node children count: {}", node.children.len());
         self.root = Some(node);
     }
 

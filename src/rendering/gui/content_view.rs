@@ -9,6 +9,7 @@ pub struct ContentView {
     loading_progress: f32,
     layout_viewport_width: f32,  // Viewport width used for layout
     layout_viewport_height: f32,  // Viewport height used for layout
+    current_url: String,  // Current page URL for resolving relative image URLs
 }
 
 impl ContentView {
@@ -21,6 +22,7 @@ impl ContentView {
             loading_progress: 0.0,
             layout_viewport_width: 1200.0,  // Default layout viewport
             layout_viewport_height: 800.0,
+            current_url: String::new(),
         })
     }
 
@@ -70,6 +72,68 @@ impl ContentView {
     pub fn set_page_content(&mut self, content: &str) {
         self.page_content = content.to_string();
         self.loaded = true;
+    }
+    
+    pub fn set_current_url(&mut self, url: &str) {
+        self.current_url = url.to_string();
+    }
+    
+    // Resolve relative URL to absolute URL based on current page URL
+    fn resolve_url(&self, url: &str) -> String {
+        if url.is_empty() {
+            return String::new();
+        }
+        
+        // If URL is already absolute (starts with http:// or https://), return as-is
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return url.to_string();
+        }
+        
+        // If current_url is empty, can't resolve
+        if self.current_url.is_empty() {
+            log::warn!(target: "content_view", "Cannot resolve relative URL '{}': no base URL", url);
+            return url.to_string();
+        }
+        
+        // Parse base URL
+        let base_url = self.current_url.trim_end_matches('/');
+        
+        if url.starts_with("//") {
+            // Protocol-relative URL (//example.com/image.png)
+            if let Some(scheme_end) = base_url.find("://") {
+                let scheme = &base_url[..scheme_end];
+                return format!("{}:{}", scheme, url);
+            }
+        } else if url.starts_with('/') {
+            // Absolute path relative to domain root (/images/logo.png)
+            if let Some(scheme_end) = base_url.find("://") {
+                let after_scheme = &base_url[scheme_end + 3..];
+                if let Some(path_start) = after_scheme.find('/') {
+                    let domain = &after_scheme[..path_start];
+                    return format!("{}://{}{}", &base_url[..scheme_end], domain, url);
+                } else {
+                    // No path in base URL, just domain
+                    return format!("{}{}", base_url, url);
+                }
+            }
+        } else {
+            // Relative path (images/logo.png)
+            // Find the last '/' in base_url to get the directory
+            if let Some(scheme_end) = base_url.find("://") {
+                let after_scheme = &base_url[scheme_end + 3..];
+                if let Some(last_slash) = after_scheme.rfind('/') {
+                    // Get the base path up to the last directory
+                    let base_path = &base_url[..scheme_end + 3 + last_slash + 1];
+                    return format!("{}{}", base_path, url);
+                } else {
+                    // No path, just domain - append with /
+                    return format!("{}/{}", base_url, url);
+                }
+            }
+        }
+        
+        // Fallback: return original URL
+        url.to_string()
     }
     
     fn color_to_rgb(color: &Color) -> u32 {
@@ -180,16 +244,33 @@ impl gpui::Render for ContentView {
                             image_count, alt, x, y, width, height);
                         
                         // Render actual image using GPUI's img() function
-                        // If URL is relative, we might need to resolve it, but for now use as-is
+                        // Resolve relative URLs to absolute URLs
                         let image_url = if url.is_empty() {
-                            // Fallback: show placeholder if no URL
+                            // Fallback: skip if no URL
                             continue;
                         } else {
-                            url.as_str()
+                            self.resolve_url(url.as_str())
                         };
+                        
+                        log::debug!(target: "content_view", "Resolved image URL: '{}' -> '{}'", url, image_url);
                         
                         let scaled_width = (*width * scale).max(1.0);
                         let scaled_height = (*height * scale).max(1.0);
+                        let alt_text = alt.clone();
+                        
+                        // GPUI's img() function doesn't support remote HTTP/HTTPS URLs
+                        // For now, render a placeholder with the image URL information
+                        // TODO: Implement image fetching and rendering when GPUI supports it
+                        // or implement custom image loading using the networking module
+                        let placeholder_text: String = if alt_text.is_empty() { 
+                            if image_url.len() > 40 {
+                                format!("Image\n{}...", &image_url[..40])
+                            } else {
+                                format!("Image\n{}", image_url)
+                            }
+                        } else { 
+                            alt_text.to_string() 
+                        };
                         
                         container = container.child(
                             div()
@@ -198,10 +279,20 @@ impl gpui::Render for ContentView {
                                 .top(px(*y * scale))
                                 .w(px(scaled_width))
                                 .h(px(scaled_height))
+                                .bg(gpui::rgb(0xf0f0f0))
+                                .border(px(1.0))
+                                .border_color(gpui::rgb(0xcccccc))
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .justify_center()
+                                .text_color(gpui::rgb(0x666666))
+                                .text_xs()
+                                .p_2()
                                 .child(
-                                    img(image_url)
-                                        .w(px(scaled_width))
-                                        .h(px(scaled_height))
+                                    div()
+                                        .text_center()
+                                        .child(placeholder_text)
                                 )
                         );
                     }

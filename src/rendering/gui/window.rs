@@ -2,10 +2,10 @@ use gpui::{div, prelude::*, Context, Render, Window, Entity, actions, px};
 use super::{address_bar::AddressBar, toolbar::Toolbar, content_view::ContentView, dev_panel::DevPanel};
 use std::sync::mpsc;
 
-actions!(window, [ToggleDevPanel]);
+actions!(window, [ToggleDevPanel, LoadUrl]);
 
 pub enum LoadResult {
-    Success { content: String, display_list: crate::rendering::DisplayList, console_logs: Vec<(String, String)> },
+    Success { url: String, content: String, display_list: crate::rendering::DisplayList, console_logs: Vec<(String, String)> },
     Error(String),
 }
 
@@ -42,6 +42,13 @@ impl BrowserWindow {
         });
         // Force a re-render
         cx.notify();
+    }
+
+    pub fn handle_load_url(&mut self, _: &LoadUrl, _window: &mut Window, cx: &mut Context<Self>) {
+        // Get URL from address bar
+        let url = self.address_bar.read(cx).url().to_string();
+        log::info!(target: "browser", "LoadUrl action received, loading URL from address bar: {}", url);
+        self.load_url(&url, cx);
     }
 
     pub fn current_url(&self, cx: &Context<Self>) -> String {
@@ -119,7 +126,7 @@ impl BrowserWindow {
                             console_logs.push((level, message));
                         }
                         
-                        match tx.send(LoadResult::Success { content, display_list, console_logs }) {
+                        match tx.send(LoadResult::Success { url: url_clone.clone(), content, display_list, console_logs }) {
                             Ok(_) => log::info!(target: "browser", "Sent success result to UI thread"),
                             Err(e) => log::error!(target: "browser", "Failed to send result: {}", e),
                         }
@@ -155,18 +162,22 @@ impl Render for BrowserWindow {
                 Ok(result) => {
                     log::info!(target: "browser", "Received load result in render");
                     match result {
-                        LoadResult::Success { content, display_list, console_logs } => {
+                        LoadResult::Success { url, content, display_list, console_logs } => {
                             let item_count = display_list.items().len();
                             let content_len = content.len();
                             log::info!(target: "browser", "Load success: content len={}, display_list items={}", 
                                 content_len, item_count);
                             log::debug!(target: "browser", "Page rendering complete with {} display items", item_count);
+                            // Store the URL for resolving relative image URLs
+                            let url_for_resolution = url.clone();
                             self.content_view.update(cx, |cv, _cx| {
                                 cv.set_display_list(display_list);
                                 cv.set_page_content(&content);
                                 cv.set_loading_progress(1.0);
                                 // Set layout viewport size (default 1200x800 used in browser)
                                 cv.set_layout_viewport_size(1200.0, 800.0);
+                                // Set current URL for resolving relative image URLs
+                                cv.set_current_url(&url_for_resolution);
                             });
                             let has_console_logs = !console_logs.is_empty();
                             self.dev_panel.update(cx, |panel, _cx| {
@@ -216,6 +227,7 @@ impl Render for BrowserWindow {
             .size_full()
             .relative()
             .on_action(cx.listener(Self::toggle_dev_panel))
+            .on_action(cx.listener(Self::handle_load_url))
             .child(
                 div()
                     .flex()

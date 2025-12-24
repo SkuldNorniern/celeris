@@ -402,7 +402,9 @@ impl CssParser {
     fn parse_declarations(&mut self) -> Vec<Declaration> {
         let mut declarations = Vec::new();
         let mut iterations = 0;
-        const MAX_DECLARATIONS: usize = 1000; // Prevent excessive declarations
+        // Increased limit to handle large CSS files (e.g., Google's CSS)
+        // With proper parsing logic, this should not cause memory issues
+        const MAX_DECLARATIONS: usize = 10000; // Increased from 1000 to handle real-world CSS
 
         loop {
             iterations += 1;
@@ -416,12 +418,28 @@ impl CssParser {
                 break;
             }
 
+            let pos_before = self.position;
             if let Some(declaration) = self.parse_declaration() {
                 declarations.push(declaration);
+            } else {
+                // If parsing failed, ensure we make progress to avoid infinite loops
+                if self.position == pos_before && !self.eof() {
+                    // Skip the problematic character
+                    self.next_char();
+                }
             }
 
             self.consume_whitespace();
-            self.expect_char(';');
+            
+            // Check for closing brace before expecting semicolon
+            if self.peek_char() == '}' {
+                break;
+            }
+            
+            // Try to consume semicolon, but don't fail if it's missing
+            if self.peek_char() == ';' {
+                self.next_char();
+            }
         }
 
         declarations

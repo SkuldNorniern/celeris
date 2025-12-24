@@ -28,7 +28,7 @@ impl RenderTree {
     
     /// Build a RenderTree recursively from a StyledNode
     pub fn build_from_styled_node(styled_node: &StyledNode, x: f32, y: f32, layout_engine: &mut crate::rendering::layout::LayoutEngine) -> Self {
-        log::info!(target: "tree", "Building RenderTree with viewport {}x{}", layout_engine.viewport_width(), layout_engine.viewport_height());
+        log::debug!(target: "tree", "Building RenderTree with viewport {}x{}", layout_engine.viewport_width(), layout_engine.viewport_height());
         let mut root = RenderNode::new(styled_node.clone());
         Self::build_render_node_recursive(&mut root, styled_node, x, y, layout_engine);
         Self { root }
@@ -113,7 +113,7 @@ impl RenderTree {
         if let crate::dom::NodeType::Element { tag_name, .. } = styled_node.node.node_type() {
             let tag_lower = tag_name.to_lowercase();
             if tag_lower == "div" || tag_lower == "body" || tag_lower == "html" {
-                log::info!(target: "tree", "Tree node <{}> at x={}, width={}, viewport={}",
+                log::debug!(target: "tree", "Tree node <{}> at x={}, width={}, viewport={}",
                     tag_lower, bounds.x, bounds.width, viewport_width);
             }
         }

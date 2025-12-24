@@ -26,12 +26,22 @@ pub struct BrowserConfig {
 impl Browser {
     pub fn new(config: BrowserConfig) -> Result<Self, Box<dyn Error>> {
         let config_clone = config.clone();
-        Ok(Self {
+        let mut browser = Self {
             config,
             networking: networking::NetworkManager::new()?,
             renderer: rendering::Renderer::new(config_clone.headless)?,
             js_engine: javascript::JavaScriptEngine::new(),
-        })
+        };
+        
+        // In headless mode, use a reasonable default viewport size for layout calculations
+        // This is needed for proper text extraction and layout, even without visual rendering
+        if config_clone.headless {
+            // Use a standard desktop viewport size for headless mode
+            browser.set_viewport_size(1920, 1080);
+        }
+        // In GUI mode, viewport will be set by the GUI when window size is known
+        
+        Ok(browser)
     }
 
     pub fn set_viewport_size(&mut self, width: u32, height: u32) {
@@ -83,6 +93,64 @@ impl Browser {
             // Pass the shared reference so JS can modify the actual DOM
             self.js_engine.bind_dom_shared(Rc::clone(&shared_dom_root));
             
+            // Create javascript-detection element if it doesn't exist
+            {
+                let mut root = shared_dom_root.borrow_mut();
+                fn find_by_id_mut<'a>(node: &'a mut dom::Node, id: &str) -> Option<&'a mut dom::Node> {
+                    if let Some(node_id) = node.get_attribute("id") {
+                        if node_id == id {
+                            return Some(node);
+                        }
+                    }
+                    for child in node.children_mut() {
+                        if let Some(found) = find_by_id_mut(child, id) {
+                            return Some(found);
+                        }
+                    }
+                    None
+                }
+                
+                // Find body element
+                fn find_body_mut<'a>(node: &'a mut dom::Node) -> Option<&'a mut dom::Node> {
+                    match node.node_type() {
+                        dom::NodeType::Element { tag_name, .. } if tag_name.eq_ignore_ascii_case("body") => {
+                            return Some(node);
+                        }
+                        _ => {}
+                    }
+                    for child in node.children_mut() {
+                        if let Some(found) = find_body_mut(child) {
+                            return Some(found);
+                        }
+                    }
+                    None
+                }
+                
+                // Check if javascript-detection element exists
+                if find_by_id_mut(&mut *root, "javascript-detection").is_none() {
+                    log::info!(target: "browser", "javascript-detection element not found, creating it");
+                    // Create the element
+                    let detection_elem = dom::Node::new(dom::NodeType::Element {
+                        tag_name: "div".to_string(),
+                        attributes: vec![dom::Attribute {
+                            name: "id".to_string(),
+                            value: "javascript-detection".to_string(),
+                        }],
+                        events: Vec::new(),
+                    });
+                    
+                    // Try to add it to body, or root if body doesn't exist
+                    if let Some(body) = find_body_mut(&mut *root) {
+                        body.add_child(detection_elem);
+                        log::info!(target: "browser", "Added javascript-detection element to body");
+                    } else {
+                        // If no body, add to root
+                        root.add_child(detection_elem);
+                        log::info!(target: "browser", "Added javascript-detection element to root (no body found)");
+                    }
+                }
+            }
+            
             // Execute inline scripts first (non-defer)
             self.execute_inline_scripts(&*shared_dom_root.borrow());
             
@@ -105,7 +173,7 @@ impl Browser {
                 .unwrap_or(true);
             
             if is_undefined {
-                log::warn!(target: "browser", "do_capabilities_detection not defined after deferred scripts, defining stub");
+                log::info!(target: "browser", "do_capabilities_detection not defined after deferred scripts, defining stub");
                 // Define a stub function that modifies the DOM
                 let stub_code = r#"
                     function do_capabilities_detection() {

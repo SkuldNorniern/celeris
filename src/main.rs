@@ -18,7 +18,7 @@ fn main() {
     }
     
     // Initialize logger with error handling
-    if let Err(e) = celeris::logger::init(log::LevelFilter::Warn) {
+    if let Err(e) = celeris::logger::init(log::LevelFilter::Debug) {
         eprintln!("Failed to initialize logger: {}", e);
         return;
     }
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .map_err(|_| "Failed to install rustls crypto provider")?;
     
     // Initialize logger with error handling
-    celeris::logger::init(log::LevelFilter::Info)
+    celeris::logger::init(log::LevelFilter::Debug)
         .map_err(|e| format!("Failed to initialize logger: {}", e))?;
 
     // Force headless mode when GUI feature is not enabled

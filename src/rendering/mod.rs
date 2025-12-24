@@ -68,9 +68,15 @@ pub struct Color {
 
 impl Renderer {
     pub fn new(headless: bool) -> Result<Self, Box<dyn Error>> {
+        // Default viewport size - needed for layout calculations even in headless mode
+        // In headless mode, this is a reasonable default for text extraction and layout
+        // The viewport can be changed via set_viewport_size() if needed
+        const DEFAULT_VIEWPORT_WIDTH: u32 = 800;
+        const DEFAULT_VIEWPORT_HEIGHT: u32 = 600;
+        
         Ok(Self {
             headless,
-            layout_engine: layout::LayoutEngine::new(800, 600),
+            layout_engine: layout::LayoutEngine::new(DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT),
             painter: Painter::new(headless)?,
         })
     }
