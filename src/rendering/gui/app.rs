@@ -23,10 +23,12 @@ impl BrowserApp {
     #[cfg(feature = "gui")]
     pub fn run(self) {
         use super::address_bar::{Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Paste, Cut, Copy};
+        use super::window::ToggleDevPanel;
         
         Application::new().run(|cx| {
             log::info!(target: "browser", "Browser GUI application started");
             
+            // Bind keys - F12 should work globally
             cx.bind_keys([
                 gpui::KeyBinding::new("backspace", Backspace, None),
                 gpui::KeyBinding::new("delete", Delete, None),
@@ -42,6 +44,10 @@ impl BrowserApp {
                 gpui::KeyBinding::new("end", End, None),
                 gpui::KeyBinding::new("enter", super::address_bar::Enter, None),
             ]);
+            
+            // Bind F12 separately and ensure it's available to all windows
+            cx.bind_keys([gpui::KeyBinding::new("f12", ToggleDevPanel, None)]);
+            cx.bind_keys([gpui::KeyBinding::new("F12", ToggleDevPanel, None)]);
             
             let window_options = WindowOptions {
                 window_bounds: Some(gpui::WindowBounds::Windowed(

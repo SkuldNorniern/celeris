@@ -8,15 +8,12 @@ pub mod layout;
 pub mod painter;
 pub mod tree;
 
+pub use tree::{RenderTree, RenderNode, Bounds};
+
 pub struct Renderer {
     headless: bool,
-    layout_engine: LayoutEngine,
+    layout_engine: layout::LayoutEngine,
     painter: Painter,
-}
-
-struct LayoutEngine {
-    viewport_width: u32,
-    viewport_height: u32,
 }
 
 struct Painter {
@@ -73,32 +70,26 @@ impl Renderer {
     pub fn new(headless: bool) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             headless,
-            layout_engine: LayoutEngine::new(800, 600),
+            layout_engine: layout::LayoutEngine::new(800, 600),
             painter: Painter::new(headless)?,
         })
+    }
+    
+    pub fn set_viewport_size(&mut self, width: u32, height: u32) {
+        self.layout_engine.set_viewport_size(width, height);
     }
 
     pub fn layout(&mut self, styled_node: &StyledNode) -> DisplayList {
         self.layout_engine.compute_layout(styled_node)
     }
+    
+    /// Build a RenderTree from a StyledNode (alternative to direct DisplayList)
+    pub fn build_render_tree(&mut self, styled_node: &StyledNode) -> tree::RenderTree {
+        tree::RenderTree::build_from_styled_node(styled_node, 0.0, 0.0, &mut self.layout_engine)
+    }
 
     pub fn paint(&mut self, display_list: &DisplayList) -> Result<(), Box<dyn Error>> {
         self.painter.paint(display_list)
-    }
-}
-
-impl LayoutEngine {
-    fn new(viewport_width: u32, viewport_height: u32) -> Self {
-        Self {
-            viewport_width,
-            viewport_height,
-        }
-    }
-
-    fn compute_layout(&self, styled_node: &StyledNode) -> DisplayList {
-        
-        // Implement layout computation
-        DisplayList::new()
     }
 }
 

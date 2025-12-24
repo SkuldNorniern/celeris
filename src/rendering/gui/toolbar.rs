@@ -37,7 +37,11 @@ impl Toolbar {
                         gpui::rgb(0x999999)
                     })
                     .hover(|style| {
-                        style.bg(gpui::rgb(0xf0f0f0)).rounded_md()
+                        if self.can_go_back {
+                            style.bg(gpui::rgb(0xf0f0f0)).rounded_md()
+                        } else {
+                            style
+                        }
                     })
                     .child("←")
             )
@@ -55,7 +59,11 @@ impl Toolbar {
                         gpui::rgb(0x999999)
                     })
                     .hover(|style| {
-                        style.bg(gpui::rgb(0xf0f0f0)).rounded_md()
+                        if self.can_go_forward {
+                            style.bg(gpui::rgb(0xf0f0f0)).rounded_md()
+                        } else {
+                            style
+                        }
                     })
                     .child("→")
             )

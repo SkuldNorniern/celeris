@@ -8,6 +8,8 @@ mod address_bar;
 mod toolbar;
 #[cfg(feature = "gui")]
 mod content_view;
+#[cfg(feature = "gui")]
+mod dev_panel;
 
 #[cfg(feature = "gui")]
 pub use app::BrowserApp;

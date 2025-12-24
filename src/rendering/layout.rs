@@ -1,4 +1,4 @@
-use super::{DisplayList, DisplayItem};
+use super::{DisplayList, DisplayItem, Color};
 use crate::css::style::StyledNode;
 use crate::html::entities;
 use std::collections::HashMap;
@@ -7,6 +7,93 @@ pub struct LayoutEngine {
     viewport_width: u32,
     viewport_height: u32,
     computed_styles: HashMap<String, ComputedStyle>,
+    font_manager: FontManager,
+}
+
+#[derive(Clone, Debug)]
+pub struct FontMetrics {
+    pub ascent: f32,
+    pub descent: f32,
+    pub line_gap: f32,
+    pub line_height: f32,
+}
+
+pub struct FontManager {
+    // Font cache and metrics
+    font_cache: HashMap<String, FontMetrics>,
+}
+
+impl FontManager {
+    pub fn new() -> Self {
+        let mut font_cache = HashMap::new();
+
+        // Default font metrics (approximations)
+        font_cache.insert("default".to_string(), FontMetrics {
+            ascent: 12.0,
+            descent: 3.0,
+            line_gap: 2.0,
+            line_height: 17.0,
+        });
+
+        font_cache.insert("serif".to_string(), FontMetrics {
+            ascent: 13.0,
+            descent: 4.0,
+            line_gap: 2.0,
+            line_height: 19.0,
+        });
+
+        font_cache.insert("sans-serif".to_string(), FontMetrics {
+            ascent: 12.0,
+            descent: 3.0,
+            line_gap: 1.0,
+            line_height: 16.0,
+        });
+
+        font_cache.insert("monospace".to_string(), FontMetrics {
+            ascent: 11.0,
+            descent: 3.0,
+            line_gap: 1.0,
+            line_height: 15.0,
+        });
+
+        Self { font_cache }
+    }
+
+    pub fn get_metrics(&self, font_family: &[String], font_size: f32) -> &FontMetrics {
+        // Find the first available font family
+        for family in font_family {
+            if let Some(metrics) = self.font_cache.get(family) {
+                return metrics;
+            }
+        }
+
+        // Fallback to default
+        &self.font_cache["default"]
+    }
+
+    pub fn measure_text(&self, text: &str, font_family: &[String], font_size: f32) -> TextMetrics {
+        let metrics = self.get_metrics(font_family, font_size);
+
+        // Simple text measurement - assumes monospace for now
+        // In a real browser, this would use actual font rendering
+        let char_width = font_size * 0.6; // Approximate character width
+        let width = text.chars().count() as f32 * char_width;
+
+        TextMetrics {
+            width,
+            height: metrics.line_height,
+            ascent: metrics.ascent,
+            descent: metrics.descent,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TextMetrics {
+    pub width: f32,
+    pub height: f32,
+    pub ascent: f32,
+    pub descent: f32,
 }
 
 pub struct ComputedStyle {
@@ -16,6 +103,50 @@ pub struct ComputedStyle {
     pub height: Dimension,
     pub margin: Box<Edges>,
     pub padding: Box<Edges>,
+    pub font_family: Vec<String>,
+    pub font_size: f32,
+    pub font_weight: FontWeight,
+    pub line_height: LineHeight,
+    pub color: Color,
+    pub text_align: TextAlign,
+    pub vertical_align: VerticalAlign,
+}
+
+#[derive(Clone, Debug)]
+pub enum FontWeight {
+    Normal,
+    Bold,
+    Bolder,
+    Lighter,
+    Number(u16), // 100, 200, ..., 900
+}
+
+#[derive(Clone, Debug)]
+pub enum LineHeight {
+    Normal,
+    Number(f32),
+    Length(f32),
+}
+
+#[derive(Clone, Debug)]
+pub enum TextAlign {
+    Left,
+    Right,
+    Center,
+    Justify,
+}
+
+#[derive(Clone, Debug)]
+pub enum VerticalAlign {
+    Baseline,
+    Top,
+    Middle,
+    Bottom,
+    Sub,
+    Super,
+    TextTop,
+    TextBottom,
+    Length(f32),
 }
 
 pub struct Edges {
@@ -50,42 +181,123 @@ impl LayoutEngine {
             viewport_width,
             viewport_height,
             computed_styles: HashMap::new(),
+            font_manager: FontManager::new(),
         }
+    }
+    
+    pub fn set_viewport_size(&mut self, width: u32, height: u32) {
+        self.viewport_width = width;
+        self.viewport_height = height;
+    }
+
+    pub fn viewport_width(&self) -> u32 {
+        self.viewport_width
+    }
+
+    pub fn viewport_height(&self) -> u32 {
+        self.viewport_height
     }
 
     pub fn compute_layout(&mut self, styled_node: &StyledNode) -> DisplayList {
-        log::info!(target: "layout", "Starting layout computation");
+        log::info!(target: "layout", "Starting layout computation with viewport: {}x{}", 
+            self.viewport_width, self.viewport_height);
+        
+        // Log root node info
+        match styled_node.node.node_type() {
+            crate::dom::NodeType::Element { tag_name, .. } => {
+                log::info!(target: "layout", "Root node: <{}> with {} children", tag_name, styled_node.node.children().len());
+            }
+            _ => {
+                log::info!(target: "layout", "Root node type: {:?}", styled_node.node.node_type());
+            }
+        }
+        
         let mut display_list = DisplayList::new();
-        let _height = self.layout_node(styled_node, 0.0, 0.0, &mut display_list);
-        log::info!(target: "layout", "Layout complete, created {} display items", display_list.items().len());
+        let height = self.layout_node(styled_node, 0.0, 0.0, &mut display_list);
+        log::info!(target: "layout", "Layout complete, created {} display items, root height: {}", 
+            display_list.items().len(), height);
+        
+        // Log breakdown of items and sample x positions
+        let (text, rect, img, btn) = display_list.items().iter().fold((0, 0, 0, 0), |(t, r, i, b), item| {
+            match item {
+                super::DisplayItem::Text { .. } => (t + 1, r, i, b),
+                super::DisplayItem::Rectangle { .. } => (t, r + 1, i, b),
+                super::DisplayItem::Image { .. } => (t, r, i + 1, b),
+                super::DisplayItem::Button { .. } => (t, r, i, b + 1),
+            }
+        });
+        log::info!(target: "layout", "Items breakdown: {} text, {} rects, {} images, {} buttons", text, rect, img, btn);
+        
+        // Log first 10 items' x positions to debug positioning
+        for (idx, item) in display_list.items().iter().take(10).enumerate() {
+            match item {
+                super::DisplayItem::Text { x, .. } => {
+                    log::info!(target: "layout", "Item #{}: Text at x={}", idx, x);
+                }
+                super::DisplayItem::Rectangle { x, width, .. } => {
+                    log::info!(target: "layout", "Item #{}: Rectangle at x={}, width={}", idx, x, width);
+                }
+                super::DisplayItem::Image { x, width, .. } => {
+                    log::info!(target: "layout", "Item #{}: Image at x={}, width={}", idx, x, width);
+                }
+                super::DisplayItem::Button { x, width, .. } => {
+                    log::info!(target: "layout", "Item #{}: Button at x={}, width={}", idx, x, width);
+                }
+            }
+        }
+        
         display_list
     }
 
     fn layout_node(&mut self, node: &StyledNode, x: f32, y: f32, display_list: &mut DisplayList) -> f32 {
+        // Log what node we're processing
+        match node.node.node_type() {
+            crate::dom::NodeType::Element { tag_name, .. } => {
+                log::debug!(target: "layout", "layout_node: processing <{}> at ({}, {})", tag_name, x, y);
+            }
+            crate::dom::NodeType::Text(text) => {
+                log::debug!(target: "layout", "layout_node: processing text '{}' at ({}, {})", 
+                    text.chars().take(20).collect::<String>(), x, y);
+            }
+            _ => {}
+        }
+        
         // Handle special elements first (img, button, input) regardless of display type
+        // This must happen BEFORE checking for script/style tags
         if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
-            match tag_name.as_str() {
+            let tag_lower = tag_name.to_lowercase();
+            match tag_lower.as_str() {
                 "img" => {
                     let img_url = node.node.get_attribute("src").unwrap_or("").to_string();
                     let alt_text = node.node.get_attribute("alt").unwrap_or("").to_string();
+                    // Try to get dimensions from attributes, with better defaults
                     let img_width = node.node.get_attribute("width")
                         .and_then(|w| w.parse::<f32>().ok())
-                        .unwrap_or(100.0);
+                        .unwrap_or(200.0); // Default to 200px instead of 100px
                     let img_height = node.node.get_attribute("height")
                         .and_then(|h| h.parse::<f32>().ok())
-                        .unwrap_or(100.0);
+                        .unwrap_or(200.0); // Default to 200px instead of 100px
                     
-                    log::debug!(target: "layout", "Found img element: src={}, alt={}, size={}x{}", img_url, alt_text, img_width, img_height);
+                    // Calculate proper x position: if x < padding, use padding, else use x
+                    let padding = 20.0;
+                    let img_x = if x < padding {
+                        padding
+                    } else {
+                        x
+                    };
+                    
+                    log::info!(target: "layout", "Found img element: src='{}', alt='{}', size={}x{} at ({}, {}) -> img_x={}", 
+                        img_url, alt_text, img_width, img_height, x, y, img_x);
                     
                     display_list.add_item(DisplayItem::Image {
                         url: img_url,
-                        x,
+                        x: img_x,
                         y,
                         width: img_width,
                         height: img_height,
                         alt: alt_text,
                     });
-                    return img_height; // Return height for parent to track
+                    return img_height + 8.0; // Return height with margin for parent to track
                 }
                 "button" | "input" => {
                     let button_text = if tag_name == "button" {
@@ -109,14 +321,22 @@ impl LayoutEngine {
                             .to_string()
                     };
                     
-                    log::debug!(target: "layout", "Found {} element: text={}", tag_name, button_text);
+                    // Calculate proper x position: if x < padding, use padding, else use x
+                    let padding = 20.0;
+                    let button_x = if x < padding {
+                        padding
+                    } else {
+                        x
+                    };
+                    
+                    log::debug!(target: "layout", "Found {} element: text={} at ({}, {}) -> button_x={}", tag_name, button_text, x, y, button_x);
                     
                     let button_width = 120.0;
                     let button_height = 32.0;
                     
                     display_list.add_item(DisplayItem::Button {
                         text: button_text,
-                        x,
+                        x: button_x,
                         y,
                         width: button_width,
                         height: button_height,
@@ -125,6 +345,22 @@ impl LayoutEngine {
                 }
                 _ => {}
             }
+        }
+        
+        // Skip script and style content - they should not be rendered
+        if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
+            let tag_lower = tag_name.to_lowercase();
+            if matches!(tag_lower.as_str(), "script" | "style" | "noscript") {
+                log::debug!(target: "layout", "Skipping {} element (not renderable)", tag_lower);
+                // Don't process children of script/style tags - they should not be rendered
+                return 0.0;
+            }
+        }
+        
+        // Also skip text nodes that are direct children of script/style tags
+        // (This is a safety check - script tags should already be filtered above)
+        if let crate::dom::NodeType::Text(_) = node.node.node_type() {
+            // We can't easily check parent here, but script tags should be filtered above
         }
         
         // Basic layout algorithm - expand as needed
@@ -143,10 +379,11 @@ impl LayoutEngine {
         }
     }
 
-    fn compute_style(&self, node: &StyledNode) -> ComputedStyle {
+    pub fn compute_style(&self, node: &StyledNode) -> ComputedStyle {
         // Determine display type based on element
         let display = if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
-            match tag_name.as_str() {
+            let tag_lower = tag_name.to_lowercase();
+            match tag_lower.as_str() {
                 "div" | "section" | "article" | "header" | "footer" | "main" | "body" | "html" | 
                 "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | 
                 "blockquote" | "nav" | "aside" | "form" | "table" | "tr" | "td" | "th" => Display::Block,
@@ -175,20 +412,45 @@ impl LayoutEngine {
                 bottom: 0.0,
                 left: 0.0,
             }),
+            font_family: vec!["sans-serif".to_string()],
+            font_size: 16.0,
+            font_weight: FontWeight::Normal,
+            line_height: LineHeight::Normal,
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+            text_align: TextAlign::Left,
+            vertical_align: VerticalAlign::Baseline,
         }
     }
 
-    fn layout_block(&mut self, node: &StyledNode, x: f32, y: f32, _style: &ComputedStyle, display_list: &mut DisplayList) -> f32 {
+    fn layout_block(&mut self, node: &StyledNode, x: f32, y: f32, style: &ComputedStyle, display_list: &mut DisplayList) -> f32 {
         let mut current_y = y;
-        let padding = 10.0;
-        let line_height = 24.0;
-        let margin = 8.0;
+        // Use viewport-based padding and margins for better layout
+        // Increased padding for better left/right margins
+        let padding = 20.0;
+        let font_metrics = self.font_manager.get_metrics(&style.font_family, style.font_size);
+        let line_height = match style.line_height {
+            LineHeight::Normal => font_metrics.line_height,
+            LineHeight::Number(n) => style.font_size * n,
+            LineHeight::Length(h) => h,
+        };
+        let margin = 12.0;
         let block_start_y = current_y;
         
-        // Skip non-content elements
+        // Skip non-content elements, but still process their children
         if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
-            if matches!(tag_name.as_str(), "script" | "style" | "meta" | "link" | "head" | "title") {
-                return 0.0;
+            let tag_lower = tag_name.to_lowercase();
+            if matches!(tag_lower.as_str(), "script" | "style" | "meta" | "link" | "head" | "title" | "#document") {
+                // For skipped elements, still process children but don't create rectangles
+                let mut max_child_height: f32 = 0.0;
+                for child in node.node.children() {
+                    let styled_child = crate::css::style::StyledNode::new(child.clone());
+                    let child_height: f32 = self.layout_node(&styled_child, x, current_y, display_list);
+                    if child_height > 0.0 {
+                        max_child_height = max_child_height.max(child_height);
+                        current_y += child_height + margin;
+                    }
+                }
+                return max_child_height;
             }
         }
         
@@ -196,8 +458,11 @@ impl LayoutEngine {
         let mut has_children = false;
         let mut max_child_height: f32 = 0.0;
         
-        for child in node.node.children() {
+        for (idx, child) in node.node.children().iter().enumerate() {
             let styled_child = crate::css::style::StyledNode::new(child.clone());
+            if let crate::dom::NodeType::Element { tag_name, .. } = child.node_type() {
+                log::debug!(target: "layout", "Processing child #{}: <{}> at y={}", idx, tag_name, current_y);
+            }
             let child_height: f32 = self.layout_node(&styled_child, x + padding, current_y, display_list);
             
             if child_height > 0.0 {
@@ -226,43 +491,86 @@ impl LayoutEngine {
         }
         
         // Handle text nodes directly in block elements
+        // Skip text that looks like JavaScript code (heuristic: contains common JS patterns)
         match node.node.node_type() {
             crate::dom::NodeType::Text(text) => {
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    let decoded = entities::decode_html_entities(trimmed);
-                    if !decoded.trim().is_empty() {
-                        display_list.add_item(DisplayItem::Text {
-                            content: decoded,
-                            x: x + padding,
-                            y: current_y, // Use current_y instead of y for proper positioning
-                            color: super::Color { r: 0, g: 0, b: 0, a: 255 },
-                        });
-                        // Update current_y for text
-                        current_y += line_height;
+                    // Heuristic: skip text that looks like JavaScript code
+                    // This catches script content that might have slipped through
+                    let looks_like_js = trimmed.contains("function") || 
+                                       trimmed.contains("var ") || 
+                                       trimmed.contains("const ") ||
+                                       trimmed.contains("let ") ||
+                                       trimmed.contains("=>") ||
+                                       (trimmed.contains("{") && trimmed.contains("}") && trimmed.len() > 50);
+                    
+                    if !looks_like_js {
+                        let decoded = entities::decode_html_entities(trimmed);
+                        if !decoded.trim().is_empty() {
+                            // Calculate proper x position: if x < padding, use padding, else use x
+                            let text_x = if x < padding {
+                                padding
+                            } else {
+                                x
+                            };
+                            display_list.add_item(DisplayItem::Text {
+                                content: decoded,
+                                x: text_x,
+                                y: current_y, // Use current_y instead of y for proper positioning
+                                color: style.color.clone(),
+                            });
+                            // Update current_y for text
+                            current_y += line_height;
+                        }
+                    } else {
+                        log::debug!(target: "layout", "Skipping text that looks like JavaScript code");
                     }
                 }
             }
             crate::dom::NodeType::Element { tag_name, .. } => {
+                let tag_lower = tag_name.to_lowercase();
                 // Create rectangles for block-level elements
-                if matches!(tag_name.as_str(), "div" | "section" | "article" | "header" | "footer" | "main" | "body" | "html" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "nav" | "aside") {
+                if matches!(tag_lower.as_str(), "div" | "section" | "article" | "header" | "footer" | "main" | "body" | "html" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "nav" | "aside") {
                     let block_height = if has_children && current_y > block_start_y {
                         current_y - block_start_y + margin
                     } else {
                         line_height
                     };
-                    let block_width = (self.viewport_width as f32) - (x * 2.0);
+                    // Calculate block width - use full viewport width minus padding on both sides
+                    // The x position already includes left padding for nested elements
+                    // For root elements (x=0), we need to add left padding
+                    // For nested elements, x already includes padding, so we use it as-is
+                    let left_padding = 20.0;
+                    let right_padding = 20.0;
                     
-                    // Only add rectangle if it has meaningful dimensions
-                    if block_width > 0.0 && block_height > 0.0 {
-                        // Add rectangle for block element with subtle border color
-                        // Use a light gray background for visibility
+                    // Determine the actual left edge of this block
+                    let block_x = if x < left_padding {
+                        // Root element: start at left padding
+                        left_padding
+                    } else {
+                        // Nested element: x already includes padding
+                        x
+                    };
+                    
+                    // Calculate available width from block_x to viewport edge
+                    let available_width = (self.viewport_width as f32) - block_x - right_padding;
+                    let block_width = available_width.max(50.0);
+                    
+                    // Log for debugging - log ALL block elements to see what's happening
+                    log::info!(target: "layout", "Block <{}> x={}, block_x={}, viewport={}, available={}, width={}", 
+                        tag_lower, x, block_x, self.viewport_width, available_width, block_width);
+                    
+                    // Only add rectangle if it has meaningful dimensions and is not the root html/body
+                    // Use white background for layout structure (will be filtered in rendering)
+                    // Use block_x instead of x for proper positioning
+                    if block_width > 0.0 && block_height > 0.0 && !matches!(tag_lower.as_str(), "html" | "body") {
                         display_list.add_item(DisplayItem::Rectangle {
-                            x,
+                            x: block_x,
                             y: block_start_y,
-                            width: block_width.max(50.0),
+                            width: block_width,
                             height: block_height.max(10.0),
-                            color: super::Color { r: 245, g: 245, b: 245, a: 255 },
+                            color: super::Color { r: 255, g: 255, b: 255, a: 255 }, // White background
                         });
                     }
                 }
@@ -279,34 +587,76 @@ impl LayoutEngine {
         block_height
     }
 
-    fn layout_inline(&mut self, node: &StyledNode, x: f32, y: f32, _style: &ComputedStyle, display_list: &mut DisplayList) -> f32 {
-        let line_height = 24.0;
+    fn layout_inline(&mut self, node: &StyledNode, x: f32, y: f32, style: &ComputedStyle, display_list: &mut DisplayList) -> f32 {
+        let font_metrics = self.font_manager.get_metrics(&style.font_family, style.font_size);
+        let line_height = match style.line_height {
+            LineHeight::Normal => font_metrics.line_height,
+            LineHeight::Number(n) => style.font_size * n,
+            LineHeight::Length(h) => h,
+        };
+        
+        // Handle img tags in inline context
+        if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
+            let tag_lower = tag_name.to_lowercase();
+            if tag_lower == "img" {
+                let img_url = node.node.get_attribute("src").unwrap_or("").to_string();
+                let alt_text = node.node.get_attribute("alt").unwrap_or("").to_string();
+                let img_width = node.node.get_attribute("width")
+                    .and_then(|w| w.parse::<f32>().ok())
+                    .unwrap_or(200.0);
+                let img_height = node.node.get_attribute("height")
+                    .and_then(|h| h.parse::<f32>().ok())
+                    .unwrap_or(200.0);
+                
+                log::info!(target: "layout", "Found inline img element: src='{}', alt='{}', size={}x{} at ({}, {})", 
+                    img_url, alt_text, img_width, img_height, x, y);
+                
+                display_list.add_item(DisplayItem::Image {
+                    url: img_url,
+                    x,
+                    y,
+                    width: img_width,
+                    height: img_height,
+                    alt: alt_text,
+                });
+                return img_height;
+            }
+        }
         
         // Extract text content from text nodes
         match node.node.node_type() {
             crate::dom::NodeType::Text(text) => {
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    let decoded = entities::decode_html_entities(trimmed);
-                    if !decoded.trim().is_empty() {
-                        display_list.add_item(DisplayItem::Text {
-                            content: decoded,
-                            x,
-                            y,
-                            color: super::Color { r: 0, g: 0, b: 0, a: 255 },
-                        });
+                    // Skip JavaScript-like text
+                    let looks_like_js = trimmed.contains("function") || 
+                                       trimmed.contains("var ") || 
+                                       trimmed.contains("const ") ||
+                                       trimmed.contains("let ") ||
+                                       trimmed.contains("=>");
+                    if !looks_like_js {
+                        let decoded = entities::decode_html_entities(trimmed);
+                        if !decoded.trim().is_empty() {
+                            display_list.add_item(DisplayItem::Text {
+                                content: decoded,
+                                x,
+                                y,
+                                color: Color { r: 0, g: 0, b: 0, a: 255 },
+                            });
+                        }
                     }
                 }
                 return line_height;
             }
             crate::dom::NodeType::Element { tag_name, .. } => {
+                let tag_lower = tag_name.to_lowercase();
                 // Skip non-content elements
-                if matches!(tag_name.as_str(), "script" | "style" | "meta" | "link" | "head" | "title") {
+                if matches!(tag_lower.as_str(), "script" | "style" | "meta" | "link" | "head" | "title") {
                     return 0.0;
                 }
                 
                 // Create rectangles for inline block elements
-                if matches!(tag_name.as_str(), "span" | "a" | "strong" | "em" | "b" | "i" | "code") {
+                if matches!(tag_lower.as_str(), "span" | "a" | "strong" | "em" | "b" | "i" | "code") {
                     let char_width = 8.0;
                     let mut text_width = 0.0;
                     
@@ -332,9 +682,20 @@ impl LayoutEngine {
                 }
                 
                 // Layout children inline with proper spacing
-                let mut current_x = x;
-                let char_width = 8.0;
-                let line_height: f32 = 24.0;
+                // Calculate proper starting x position: if x < padding, use padding, else use x
+                let padding = 20.0;
+                let start_x = if x < padding {
+                    padding
+                } else {
+                    x
+                };
+                let mut current_x = start_x;
+                let char_width = style.font_size * 0.6; // Approximate character width based on font size
+                let line_height = match style.line_height {
+                    LineHeight::Normal => font_metrics.line_height,
+                    LineHeight::Number(n) => style.font_size * n,
+                    LineHeight::Length(h) => h,
+                };
                 let mut max_height: f32 = line_height;
                 
                 for child in node.node.children() {
@@ -351,7 +712,7 @@ impl LayoutEngine {
                                         content: decoded.clone(),
                                         x: current_x,
                                         y,
-                                        color: super::Color { r: 0, g: 0, b: 0, a: 255 },
+                                        color: Color { r: 0, g: 0, b: 0, a: 255 },
                                     });
                                     current_x += decoded.len() as f32 * char_width;
                                 }

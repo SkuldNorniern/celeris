@@ -4,6 +4,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, Bounds, Point, actions, ClipboardItem,
 };
 use std::ops::Range;
+use std::time::Instant;
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(
@@ -31,7 +32,8 @@ pub struct AddressBar {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    cursor_blink_time: u64,
+    cursor_blink_start: Option<Instant>,
+    is_dragging: bool,
 }
 
 impl AddressBar {
@@ -42,7 +44,8 @@ impl AddressBar {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
-            cursor_blink_time: 0,
+            cursor_blink_start: None,
+            is_dragging: false,
         })
     }
     
@@ -126,20 +129,64 @@ impl AddressBar {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let click_pos = self.position_from_point(event.position, window);
+        self.is_dragging = true;
         if event.modifiers.shift {
-            self.select_to(0, cx);
+            self.select_to(click_pos, cx);
         } else {
-            self.move_to(0, cx)
+            self.move_to(click_pos, cx);
         }
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
+        self.is_dragging = false;
     }
 
-    fn on_mouse_move(&mut self, _event: &MouseMoveEvent, _: &mut Window, _cx: &mut Context<Self>) {
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_dragging {
+            let pos = self.position_from_point(event.position, window);
+            self.select_to(pos, cx);
+        }
+    }
+
+    // Estimate character position from click point
+    // This is approximate - assumes monospace-like behavior
+    fn position_from_point(&self, point: Point<gpui::Pixels>, window: &Window) -> usize {
+        let bounds = window.bounds();
+        let padding = px(12.0);
+        let left_edge = bounds.left() + padding;
+        
+        // Approximate character width (assuming ~8px per character for typical font)
+        // This is a rough estimate - in a real implementation you'd measure actual text
+        const APPROX_CHAR_WIDTH: f32 = 8.0;
+        
+        // Simple approximation: estimate position based on click location
+        // Since we can't easily convert Pixels, we'll use a simple heuristic
+        // Place cursor at a position proportional to click location
+        let char_count = self.content.len();
+        if char_count == 0 {
+            return 0;
+        }
+        
+        // Estimate position: assume the text field spans most of the address bar width
+        // This is a rough approximation
+        let right_edge = bounds.right() - padding;
+        if point.x <= left_edge {
+            0
+        } else if point.x >= right_edge {
+            char_count
+        } else {
+            // Proportional position: estimate based on where in the field the click occurred
+            // This is a rough approximation - in production you'd measure actual text width
+            let field_start: f32 = left_edge.into();
+            let field_end: f32 = right_edge.into();
+            let click_x: f32 = point.x.into();
+            let relative_pos = (click_x - field_start) / (field_end - field_start);
+            ((relative_pos * char_count as f32) as usize).min(char_count)
+        }
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
@@ -354,14 +401,22 @@ impl gpui::Render for AddressBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_focused = self.focus_handle.is_focused(window);
         
-        // Simple cursor blink using time
-        if is_focused {
-            self.cursor_blink_time = (self.cursor_blink_time + 1) % 60;
+        // Time-based cursor blinking (530ms on, 530ms off)
+        const BLINK_PERIOD_MS: u64 = 530;
+        let cursor_visible = if is_focused {
+            let now = Instant::now();
+            if let Some(start) = self.cursor_blink_start {
+                let elapsed = now.duration_since(start).as_millis() as u64;
+                (elapsed % (BLINK_PERIOD_MS * 2)) < BLINK_PERIOD_MS
+            } else {
+                self.cursor_blink_start = Some(now);
+                true
+            }
         } else {
-            self.cursor_blink_time = 0;
-        }
+            self.cursor_blink_start = None;
+            false
+        };
         
-        let cursor_visible = is_focused && (self.cursor_blink_time < 30);
         let cursor_pos = self.selected_range.end;
         let display_text = if cursor_visible && self.selected_range.is_empty() && cursor_pos <= self.content.len() {
             let before = &self.content[..cursor_pos];
@@ -401,6 +456,14 @@ impl gpui::Render for AddressBar {
             .items_center()
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
+            .shadow_sm()
+            .hover(|style| {
+                if !is_focused {
+                    style.border_color(gpui::rgb(0x999999))
+                } else {
+                    style
+                }
+            })
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
