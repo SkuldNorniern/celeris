@@ -1,0 +1,57 @@
+/* Attribute selectors that commonly cause parsing issues */
+
+input[type="text"] {
+  border: 1px solid #ccc;
+}
+
+input[type="email"] {
+  background-image: url("data:image/svg+xml,%3csvg...");
+}
+
+a[href^="https://"]::after {
+  content: "[SECURE]";
+  margin-left: 4px;
+}
+
+img[alt] {
+  border: 2px solid #007bff;
+}
+
+input[required] {
+  border-left: 3px solid #dc3545;
+}
+
+div[data-toggle~="collapse"] {
+  cursor: pointer;
+}
+
+button[data-bs-toggle="modal"] {
+  background-color: #007bff;
+}
+
+input[value*="search"] {
+  background-image: url("search-icon.svg");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+a[href$=".pdf"]::after {
+  content: "[PDF]";
+}
+
+input[name|="phone"] {
+  width: 200px;
+}
+
+form[action*="login"] {
+  border: 2px solid #28a745;
+}
+
+/* Complex attribute selectors */
+input[type="text"][data-validation="required"] {
+  border-color: #dc3545;
+}
+
+a[href]:not([href^="mailto:"]) {
+  text-decoration: none;
+}

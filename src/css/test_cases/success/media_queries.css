@@ -1,0 +1,47 @@
+/* Media queries that commonly cause parsing issues */
+
+@media screen and (max-width: 768px) {
+  .mobile-menu {
+    display: block;
+  }
+
+  .desktop-menu {
+    display: none;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .tablet-layout {
+    flex-direction: column;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  * {
+    color: black !important;
+    background: white !important;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .dark-mode-toggle {
+    opacity: 1;
+  }
+}
+
+@media screen and (min-width: 1200px) {
+  .container {
+    max-width: 1140px;
+  }
+}
+
+@media (orientation: landscape) {
+  .hero-image {
+    height: 60vh;
+  }
+}
+

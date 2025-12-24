@@ -1,0 +1,65 @@
+/* Pseudo-selectors that cause parsing issues */
+
+a:hover {
+  color: #0056b3;
+  text-decoration: underline;
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+input:focus {
+  outline: 2px solid #007bff;
+  outline-offset: 2px;
+}
+
+.link:visited {
+  color: #6c757d;
+}
+
+/* Pseudo-elements */
+.tooltip::before {
+  content: "";
+  position: absolute;
+  border: 5px solid transparent;
+}
+
+.tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  background: #333;
+  color: white;
+  padding: 5px;
+}
+
+/* nth-child selectors */
+.list-item:nth-child(odd) {
+  background-color: #f8f9fa;
+}
+
+.table-row:nth-child(even) {
+  background-color: #e9ecef;
+}
+
+.items > li:first-child {
+  margin-top: 0;
+}
+
+.items > li:last-child {
+  margin-bottom: 0;
+}
+
+/* Complex pseudo-selectors */
+.nav-link:not(.active) {
+  color: #6c757d;
+}
+
+.form-control:invalid {
+  border-color: #dc3545;
+}
+
+.checkbox:checked + label {
+  font-weight: bold;
+}
+

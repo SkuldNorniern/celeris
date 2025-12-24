@@ -1,0 +1,53 @@
+/* Edge cases that might cause parsing issues */
+
+.selector {
+  property: value;
+  /* Missing semicolon */
+  another: value
+  /* Comment after missing semicolon */
+}
+
+/* Empty rule */
+empty {
+}
+
+/* Rule with only whitespace */
+.whitespace {
+  /* comment only */
+}
+
+/* Nested braces that aren't properly closed */
+.nested {
+  property: {
+    nested: value;
+  }
+}
+
+/* CSS with special characters */
+.special-chars {
+  content: "quotes with \"escapes\" and 'single quotes'";
+  font-family: "Times New Roman", serif, sans-serif;
+}
+
+/* Very long selectors */
+.very-long-selector-name-that-might-cause-issues-with-parsing-performance-and-memory-usage {
+  property: value;
+}
+
+/* CSS with Unicode */
+.unicode {
+  content: "中文";
+  font-family: "微软雅黑", sans-serif;
+}
+
+/* CSS with data URLs */
+.data-url {
+  background: url("data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTkgMTJMMTEgMTBMMTEgMTRMOSAxMloiIGZpbGw9ImN1cnJlbnRDb2xvciIvPgo8L3N2Zz4K");
+}
+
+/* CSS with calc() and complex expressions */
+.complex-calc {
+  width: calc(100% - 2 * (1rem + 10px));
+  margin: calc(1rem + (100% - 50%) / 2);
+}
+

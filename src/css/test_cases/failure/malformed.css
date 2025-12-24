@@ -1,0 +1,55 @@
+/* Intentionally malformed CSS that should fail gracefully */
+
+/* Missing closing brace */
+.missing-brace {
+  color: red;
+
+/* Unclosed string */
+.unclosed-string {
+  content: "missing quote;
+}
+
+/* Invalid property name */
+.invalid-prop {
+  123invalid: value;
+  -also-invalid: value;
+}
+
+/* Missing colon */
+.missing-colon {
+  color red;
+}
+
+/* Invalid selector */
+123invalid-selector {
+  color: blue;
+}
+
+/* Nested rules without proper structure */
+.parent {
+  color: red;
+
+  .child {
+    color: blue;
+  }
+}
+
+/* Malformed media query */
+@media screen (max-width: 768px {
+  .mobile {
+    display: block;
+  }
+}
+
+/* Invalid @ rules */
+@unknown-rule {
+  property: value;
+}
+
+/* CSS with syntax errors */
+.syntax-error {
+  color: #12345; /* Invalid hex color - too short */
+  margin: 10px 20px 30px; /* Missing fourth value */
+  font-size: 1rem 2rem; /* Multiple values for single-value property */
+}
+
