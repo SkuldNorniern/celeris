@@ -1,5 +1,5 @@
 use crate::rendering::{DisplayList, DisplayItem, Color};
-use gpui::{div, img, prelude::*, Entity, IntoElement, Context, px};
+use gpui::{div, prelude::*, Entity, IntoElement, Context, px};
 
 pub struct ContentView {
     loaded: bool,
@@ -198,20 +198,7 @@ impl gpui::Render for ContentView {
                     .w_full()
                     .h_full()
                     .relative()
-                    .bg(gpui::rgb(0xffffff))
-                    // Test box to verify absolute positioning works
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(10.0))
-                            .top(px(10.0))
-                            .w(px(100.0))
-                            .h(px(100.0))
-                            .bg(gpui::rgb(0xff00ff)) // Magenta test box
-                            .border(px(5.0))
-                            .border_color(gpui::rgb(0x000000))
-                            .child("TEST")
-                    );
+                    .bg(gpui::rgb(0xffffff));
                 
                 // Render rectangles first (background) - but skip white rectangles to avoid visual clutter
                 for item in items {

@@ -49,7 +49,7 @@ impl AddressBar {
         })
     }
     
-    pub fn on_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn on_enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
         let url = self.content.to_string().trim().to_string();
         if url.is_empty() {
             log::warn!(target: "address_bar", "Enter pressed but URL is empty");
@@ -58,18 +58,18 @@ impl AddressBar {
         
         log::info!(target: "address_bar", "Enter pressed, loading URL: {}", url);
         
-        // Try to find the browser window and load the URL
-        // Search through all windows to find the BrowserWindow
+        // Find the parent BrowserWindow and load the URL
+        // Note: In GPUI, child entities communicate with parent entities by searching through windows
+        // This is a common pattern when actions aren't suitable for the use case
         let mut found = false;
         for window_handle in cx.windows() {
             if let Some(browser_window) = window_handle.downcast::<super::window::BrowserWindow>() {
-                log::debug!(target: "address_bar", "Found browser window, calling load_url");
                 match browser_window.update(cx, |bw, _window, cx| {
                     bw.load_url(&url, cx);
                 }) {
                     Ok(_) => {
                         found = true;
-                        log::info!(target: "address_bar", "Successfully called load_url");
+                        log::debug!(target: "address_bar", "Successfully dispatched load_url to BrowserWindow");
                         break;
                     }
                     Err(e) => {
@@ -80,7 +80,7 @@ impl AddressBar {
         }
         
         if !found {
-            log::error!(target: "address_bar", "Could not find browser window to load URL");
+            log::error!(target: "address_bar", "Could not find BrowserWindow to load URL. This may indicate a window management issue.");
         }
     }
 

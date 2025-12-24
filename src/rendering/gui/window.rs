@@ -73,7 +73,7 @@ impl BrowserWindow {
             content_view.set_loading_progress(0.1);
         });
         
-            log::info!(target: "browser", "Loading URL: {}", url);
+        log::info!(target: "browser", "Loading URL: {}", url);
         log::debug!(target: "browser", "Starting URL load process for: {}", url);
         self.dev_panel.update(cx, |panel, _cx| {
             panel.add_log_from_string(super::dev_panel::LogLevel::Info, format!("Loading URL: {}", url));
@@ -81,16 +81,17 @@ impl BrowserWindow {
         });
         
         // Load page in a separate thread with local async runtime
-        // Note: Viewport size will be set in render method when we have window access
-        // For now use default size - this will be updated when we can pass viewport size properly
+        // Note: Viewport size is hardcoded to 1200x800 for now
+        // Future: Pass actual window bounds from render() method through a channel or state
+        const DEFAULT_VIEWPORT_WIDTH: u32 = 1200;
+        const DEFAULT_VIEWPORT_HEIGHT: u32 = 800;
+        
         let url_clone = url.clone();
         let (tx, rx) = mpsc::channel();
         let (console_tx, console_rx) = mpsc::channel();
         self.load_result_rx = Some(rx);
-        let content_view = self.content_view.clone();
-        // Default viewport size - will be improved when we can pass actual size
-        let vw = 1200u32;
-        let vh = 800u32;
+        let vw = DEFAULT_VIEWPORT_WIDTH;
+        let vh = DEFAULT_VIEWPORT_HEIGHT;
         
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
@@ -146,12 +147,11 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Get viewport size for future use
-        // Note: We can't easily pass this to the background thread right now
-        // This is a limitation we'll need to address with a better architecture
+        // Note: Viewport size is currently hardcoded to 1200x800 in load_url
+        // Future improvement: Pass actual window bounds to the browser instance for dynamic sizing
+        // The bounds are available via window.bounds() but would need to be passed through
+        // the async loading pipeline, which requires architectural changes
         let _bounds = window.bounds();
-        // let viewport_width = (bounds.right() - bounds.left()).into_px() as u32;
-        // let viewport_height = (bounds.bottom() - bounds.top()).into_px() as u32;
         
         // Update browser viewport size if we have a browser instance
         // Note: This is a bit tricky since browser is created in a separate thread
@@ -174,12 +174,14 @@ impl Render for BrowserWindow {
                                 cv.set_display_list(display_list);
                                 cv.set_page_content(&content);
                                 cv.set_loading_progress(1.0);
-                                // Set layout viewport size (default 1200x800 used in browser)
-                                cv.set_layout_viewport_size(1200.0, 800.0);
+                                // Set layout viewport size to match browser's viewport
+                                // This is used for scaling display items correctly
+                                const DEFAULT_VIEWPORT_WIDTH: u32 = 1200;
+                                const DEFAULT_VIEWPORT_HEIGHT: u32 = 800;
+                                cv.set_layout_viewport_size(DEFAULT_VIEWPORT_WIDTH as f32, DEFAULT_VIEWPORT_HEIGHT as f32);
                                 // Set current URL for resolving relative image URLs
                                 cv.set_current_url(&url_for_resolution);
                             });
-                            let has_console_logs = !console_logs.is_empty();
                             self.dev_panel.update(cx, |panel, _cx| {
                                 panel.add_log_from_string(super::dev_panel::LogLevel::Info, 
                                     format!("Page loaded: {} items, {} bytes", item_count, content_len));
