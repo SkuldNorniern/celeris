@@ -318,23 +318,50 @@ fn decompress_body(headers: &http::Headers, body: Vec<u8>) -> Result<Vec<u8>, Ne
         return Ok(body);
     };
 
+    // If body is empty, nothing to decompress
+    if body.is_empty() {
+        log::debug!(target: "network", "Body is empty, skipping decompression");
+        return Ok(body);
+    }
+
     let encoding = encoding.trim().to_lowercase();
     match encoding.as_str() {
         "gzip" | "x-gzip" => {
+            // Check if body looks like gzip (starts with gzip magic bytes: 1f 8b)
+            if body.len() < 2 || body[0] != 0x1f || body[1] != 0x8b {
+                log::warn!(target: "network", "Content-Encoding says gzip but body doesn't have gzip magic bytes, returning as-is");
+                return Ok(body);
+            }
+            
             let mut decoder = GzDecoder::new(&body[..]);
             let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .map_err(|e| NetworkError::ParseError(format!("gzip decompression failed: {e}")))?;
-            Ok(decompressed)
+            match decoder.read_to_end(&mut decompressed) {
+                Ok(_) => {
+                    log::debug!(target: "network", "Successfully decompressed gzip body: {} -> {} bytes", body.len(), decompressed.len());
+                    Ok(decompressed)
+                }
+                Err(e) => {
+                    log::warn!(target: "network", "Gzip decompression failed: {}, body len: {}, returning body as-is", e, body.len());
+                    // Fallback: return body as-is in case it's already decompressed
+                    // Some servers incorrectly set Content-Encoding: gzip when body is already plain
+                    Ok(body)
+                }
+            }
         }
         "deflate" => {
             let mut decoder = DeflateDecoder::new(&body[..]);
             let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .map_err(|e| NetworkError::ParseError(format!("deflate decompression failed: {e}")))?;
-            Ok(decompressed)
+            match decoder.read_to_end(&mut decompressed) {
+                Ok(_) => {
+                    log::debug!(target: "network", "Successfully decompressed deflate body: {} -> {} bytes", body.len(), decompressed.len());
+                    Ok(decompressed)
+                }
+                Err(e) => {
+                    log::warn!(target: "network", "Deflate decompression failed: {}, body len: {}, returning body as-is", e, body.len());
+                    // Fallback: return body as-is
+                    Ok(body)
+                }
+            }
         }
         "identity" | "" => Ok(body),
         other => {

@@ -34,6 +34,10 @@ impl Browser {
         })
     }
 
+    pub fn set_viewport_size(&mut self, width: u32, height: u32) {
+        self.renderer.set_viewport_size(width, height);
+    }
+    
     pub async fn load_url(&mut self, url: &str) -> Result<(crate::rendering::DisplayList, String), Box<dyn Error>> {
         println!("\n[*] Loading: {}", url);
         info!(target: "browser", "Starting request for URL: {}", url);
@@ -43,19 +47,21 @@ impl Browser {
 
         let raw_content = String::from_utf8_lossy(&response.body);
 
-        // Add debug print for raw content
-        println!("\n[+] Raw Page Content:");
-        println!("{}", "=".repeat(50));
-        println!("{}", raw_content);
-        println!("{}", "=".repeat(50));
+        // Print raw content only in headless mode (for debugging)
+        if self.config.headless {
+            println!("\n[+] Raw HTML Content:");
+            println!("{}", "=".repeat(80));
+            println!("{}", raw_content);
+            println!("{}", "=".repeat(80));
+        }
 
         // Use the full HTML content as-is - the parser should handle DOCTYPE, comments, etc.
         let html_content = raw_content.to_string();
 
-        if self.config.debug {
-            println!("\n[DEBUG] Parsed HTML content:");
-            println!("{}", &html_content[..500.min(html_content.len())]);
-            println!("...\n");
+        log::trace!(target: "browser", "Parsed HTML content (first 500 chars): {}",
+            html_content.chars().take(500).collect::<String>());
+        if html_content.len() > 500 {
+            log::trace!(target: "browser", "HTML content truncated (total length: {} chars)", html_content.len());
         }
 
         debug!(target: "browser", "Starting HTML parsing");
@@ -177,43 +183,36 @@ impl Browser {
         }
 
         // Add debug information about the root node
-        println!("\n[+] DOM Root Node Info:");
-        println!("{}", "=".repeat(50));
-        println!("Tag: {:?}", root.node_type());
-        println!("Children count: {}", root.children().len());
+        log::trace!(target: "browser", "DOM Root Node Info - Tag: {:?}, Children count: {}", root.node_type(), root.children().len());
 
         // Print first level children
-        println!("\nFirst level children:");
         for (i, child) in root.children().iter().enumerate() {
-            println!("Child {}: {:?}", i, child.node_type());
+            log::trace!(target: "browser", "Child {}: {:?}", i, child.node_type());
         }
-        println!("{}", "=".repeat(50));
 
         // Continue with DOM structure printing
-        println!("\n[+] Parsed DOM Structure:");
-        println!("{}", "=".repeat(50));
+        log::trace!(target: "browser", "Parsed DOM Structure:");
         self.print_dom_structure(&*root, 0);
-        println!("{}", "=".repeat(50));
 
         debug!(target: "browser", "Found root node with {} children", root.children().len());
 
-        // Parse CSS - disabled for now due to chunked encoding issues with some servers
-        let stylesheet = css::StyleSheet::new();
-        // TODO: Fix chunked encoding parser, then re-enable:
-        // let base_uri = crate::networking::Uri::parse(url).ok();
-        // let stylesheet = self.load_stylesheets(root, base_uri.as_ref()).await;
+        // Parse CSS
+        let base_uri = crate::networking::Uri::parse(url).ok();
+        let stylesheet = self.load_stylesheets(&*root, base_uri.as_ref()).await;
+        log::info!(target: "browser", "Loaded stylesheet with {} rules", stylesheet.rules().len());
         let style_engine = css::style::StyleEngine::new(stylesheet);
         let styled_dom = style_engine.apply_styles(&*root);
 
-        // Create display list and render
-        let display_list = self.renderer.layout(&styled_dom);
+        // Create display list and render using RenderTree
+        // Log viewport size before layout
+        log::info!(target: "browser", "About to compute layout, viewport should be set");
+        let render_tree = self.renderer.build_render_tree(&styled_dom);
+        let display_list = render_tree.build_display_list();
         self.renderer.paint(&display_list)?;
 
-        // Print text content
-        println!("\n[+] Page Content:");
-        println!("{}", "=".repeat(50));
+        // Print text content (trace level)
+        log::trace!(target: "browser", "Page Content:");
         self.extract_content(&*root);
-        println!("\n{}", "=".repeat(50));
 
         Ok((display_list, self.extract_text_content(&*root)))
     }
@@ -333,14 +332,13 @@ impl Browser {
                         | "tr"
                         | "form"
                 ) {
-                    println!();
+                    log::trace!(target: "browser", "Block element: {}", tag_name);
                 }
             }
             dom::NodeType::Text(text) => {
                 let text = text.trim();
                 if !text.is_empty() {
-                    debug!(target: "browser", "Processing text node: {}", text);
-                    print!("{} ", text);
+                    log::trace!(target: "browser", "Processing text node: {}", text);
                 }
             }
             dom::NodeType::Comment(_) => {
@@ -358,9 +356,9 @@ impl Browser {
                 attributes,
                 ..
             } => {
-                println!("{}Element: <{}>", indent_str, tag_name);
+                log::trace!(target: "browser", "{}Element: <{}>", indent_str, tag_name);
                 if !attributes.is_empty() {
-                    println!("{}Attributes: {:?}", indent_str + "  ", attributes);
+                    log::trace!(target: "browser", "{}Attributes: {:?}", indent_str + "  ", attributes);
                 }
 
                 // Process all children
@@ -371,11 +369,11 @@ impl Browser {
             dom::NodeType::Text(text) => {
                 let text = text.trim();
                 if !text.is_empty() {
-                    println!("{}Text: \"{}\"", indent_str, text);
+                    log::trace!(target: "browser", "{}Text: \"{}\"", indent_str, text);
                 }
             }
             dom::NodeType::Comment(comment) => {
-                println!("{}Comment: \"{}\"", indent_str, comment);
+                log::trace!(target: "browser", "{}Comment: \"{}\"", indent_str, comment);
             }
         }
     }
@@ -443,7 +441,7 @@ impl Browser {
                         }
                         return;
                     }
-                    
+
                     if let Some(src) = attributes.iter().find(|attr| attr.name == "src") {
                         let resolved = match base_uri.resolve_reference(&src.value) {
                             Ok(u) => u,
@@ -563,20 +561,30 @@ impl Browser {
         base_uri: Option<&crate::networking::Uri>,
     ) -> css::StyleSheet {
         const CSS_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-        
+
         let mut stylesheet = css::StyleSheet::new();
         let mut css_sources = Vec::new();
 
         // Collect inline styles and external stylesheet URLs
         self.collect_css_sources(root, &mut css_sources);
+        log::info!(target: "browser", "Found {} CSS sources", css_sources.len());
 
         for source in css_sources {
             match source {
                 CssSource::Inline(css) => {
-                    let mut parser = css::parser::CssParser::new(css);
-                    let parsed = parser.parse();
-                    for rule in parsed.rules() {
-                        stylesheet.add_rule(rule.clone());
+                    log::debug!(target: "browser", "Parsing inline CSS ({} chars)", css.len());
+                    let mut parser = css::parser::CssParser::new(css.clone());
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.parse())) {
+                        Ok(parsed) => {
+                            log::debug!(target: "browser", "Parsed {} CSS rules from inline styles", parsed.rules().len());
+                            for rule in parsed.rules() {
+                                stylesheet.add_rule(rule.clone());
+                            }
+                        }
+                        Err(e) => {
+                            log::error!(target: "browser", "CSS parsing panic in inline styles: {:?}", e);
+                            log::error!(target: "browser", "CSS content preview: {}", &css[..css.len().min(200)]);
+                        }
                     }
                 }
                 CssSource::External(href) => {
@@ -605,10 +613,19 @@ impl Browser {
                     };
                     
                     let css = String::from_utf8_lossy(&response.body).to_string();
-                    let mut parser = css::parser::CssParser::new(css);
-                    let parsed = parser.parse();
-                    for rule in parsed.rules() {
-                        stylesheet.add_rule(rule.clone());
+                    log::debug!(target: "browser", "Parsing external CSS from {} ({} chars)", resolved, css.len());
+                    let mut parser = css::parser::CssParser::new(css.clone());
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.parse())) {
+                        Ok(parsed) => {
+                            log::debug!(target: "browser", "Parsed {} CSS rules from {}", parsed.rules().len(), resolved);
+                            for rule in parsed.rules() {
+                                stylesheet.add_rule(rule.clone());
+                            }
+                        }
+                        Err(e) => {
+                            log::error!(target: "browser", "CSS parsing panic in {}: {:?}", resolved, e);
+                            log::error!(target: "browser", "CSS content preview: {}", &css[..css.len().min(200)]);
+                        }
                     }
                 }
             }

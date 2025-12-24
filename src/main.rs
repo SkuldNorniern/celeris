@@ -18,7 +18,7 @@ fn main() {
     }
     
     // Initialize logger with error handling
-    if let Err(e) = celeris::logger::init(log::LevelFilter::Info) {
+    if let Err(e) = celeris::logger::init(log::LevelFilter::Warn) {
         eprintln!("Failed to initialize logger: {}", e);
         return;
     }
@@ -55,8 +55,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     celeris::logger::init(log::LevelFilter::Info)
         .map_err(|e| format!("Failed to initialize logger: {}", e))?;
 
+    // Force headless mode when GUI feature is not enabled
     let mut engine = Browser::new(BrowserConfig {
-        headless: true,
+        headless: true,  // Always headless when GUI feature is disabled
         debug: true,
         enable_javascript: true,
     })?;
@@ -82,11 +83,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let start = std::time::Instant::now();
-    engine.load_url(&url).await?;
+    let (_display_list, content) = engine.load_url(&url).await?;
     let duration = start.elapsed();
 
     println!("\n[+] Page loaded in: {:.2?}", duration);
     info!(target: "browser", "Page load completed in {:?}", duration);
+
+    // Print the loaded page content in headless mode
+    println!("\n[+] Loaded Page Content:");
+    println!("{}", "=".repeat(80));
+    println!("{}", content);
+    println!("{}", "=".repeat(80));
 
     Ok(())
 }
