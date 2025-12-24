@@ -1,10 +1,10 @@
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Selector {
     pub components: Vec<SelectorComponent>,
     pub specificity: Specificity,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SelectorComponent {
     Type(String),
     Id(String),
@@ -13,9 +13,12 @@ pub enum SelectorComponent {
     Descendant,
     Child,
     Adjacent,
+    PseudoClass(String), // :hover, :active, :first-child, etc.
+    PseudoElement(String), // ::before, ::after
+    Attribute(String, Option<String>), // [attr], [attr=value], [attr~=value], etc.
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Specificity(pub u32, pub u32, pub u32);
 
 impl Selector {
