@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::sync::mpsc;
 use log::debug;
 
 pub struct Runtime {
@@ -14,6 +15,7 @@ pub struct Runtime {
     execution_depth: usize, // Track execution depth to prevent infinite recursion
     property_access_depth: usize, // Track property access depth to prevent infinite loops
     dom_content_loaded_listeners: Vec<JsValue>, // Store DOMContentLoaded event listeners
+    console_log_sender: Option<mpsc::Sender<(String, String)>>, // Sender for console logs (level, message)
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +42,7 @@ impl Runtime {
             execution_depth: 0,
             property_access_depth: 0,
             dom_content_loaded_listeners: Vec::new(),
+            console_log_sender: None,
         };
 
         // Initialize window object in global scope with common methods
@@ -49,6 +52,10 @@ impl Runtime {
         runtime.init_console();
 
         runtime
+    }
+
+    pub fn set_console_log_sender(&mut self, sender: mpsc::Sender<(String, String)>) {
+        self.console_log_sender = Some(sender);
     }
     
     pub fn bind_dom(&mut self, dom_root: &DomNode) {
@@ -790,36 +797,72 @@ impl Runtime {
         debug!(target: "javascript", "call_native_function: {} with {} args", name, args.len());
         match name {
             "console.log" | "console.info" => {
-                print!("[JS console.log] ");
+                let mut message = String::new();
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        print!(" ");
+                        message.push(' ');
                     }
-                    print!("{}", self.js_value_to_string(arg));
+                    message.push_str(&self.js_value_to_string(arg));
                 }
-                println!();
+                print!("[JS console.log] {}\n", message);
+                
+                // Send to console log channel if available
+                if let Some(ref sender) = self.console_log_sender {
+                    let level = if name == "console.info" { "info" } else { "log" };
+                    let _ = sender.send((level.to_string(), message));
+                }
+                
                 Ok(JsValue::Undefined)
             }
             "console.warn" => {
-                print!("[JS console.warn] ");
+                let mut message = String::new();
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        print!(" ");
+                        message.push(' ');
                     }
-                    print!("{}", self.js_value_to_string(arg));
+                    message.push_str(&self.js_value_to_string(arg));
                 }
-                println!();
+                print!("[JS console.warn] {}\n", message);
+                
+                // Send to console log channel if available
+                if let Some(ref sender) = self.console_log_sender {
+                    let _ = sender.send(("warn".to_string(), message));
+                }
+                
                 Ok(JsValue::Undefined)
             }
             "console.error" => {
-                print!("[JS console.error] ");
+                let mut message = String::new();
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        print!(" ");
+                        message.push(' ');
                     }
-                    print!("{}", self.js_value_to_string(arg));
+                    message.push_str(&self.js_value_to_string(arg));
                 }
-                println!();
+                print!("[JS console.error] {}\n", message);
+                
+                // Send to console log channel if available
+                if let Some(ref sender) = self.console_log_sender {
+                    let _ = sender.send(("error".to_string(), message));
+                }
+                
+                Ok(JsValue::Undefined)
+            }
+            "console.debug" => {
+                let mut message = String::new();
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        message.push(' ');
+                    }
+                    message.push_str(&self.js_value_to_string(arg));
+                }
+                print!("[JS console.debug] {}\n", message);
+                
+                // Send to console log channel if available
+                if let Some(ref sender) = self.console_log_sender {
+                    let _ = sender.send(("debug".to_string(), message));
+                }
+                
                 Ok(JsValue::Undefined)
             }
             // DOM methods - actually search the DOM

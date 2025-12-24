@@ -31,15 +31,17 @@ impl Parser {
         while let Some(token) = self.tokenizer.next_token() {
             debug!(target: "html", "Processing token: {:?}", token);
             match token {
-                Token::StartTag { name, attributes } => {
-                    debug!(target: "html", "Found start tag: <{}>", name);
+                Token::StartTag { name, attributes, self_closing, namespace } => {
+                    debug!(target: "html", "Found start tag: <{}> (namespace: {:?}, self_closing: {})",
+                           name, namespace, self_closing);
                     let new_node = Node::new(NodeType::Element {
                         tag_name: name.clone(),
                         attributes,
                         events: Vec::new(),
                     });
 
-                    if !is_void_element(&name) {
+                    let is_void = is_void_element(&name) || self_closing;
+                    if !is_void {
                         stack.push(new_node);
                     } else {
                         if let Some(parent) = stack.last_mut() {
@@ -47,12 +49,11 @@ impl Parser {
                         }
                     }
                 }
-                Token::EndTag { name } => {
+                Token::EndTag { name, namespace } => {
                     debug!(
                         target: "html",
-                        "Found end tag: </{}> (open elements: {})",
-                        name,
-                        stack.len()
+                        "Found end tag: </{}> (namespace: {:?}, open elements: {})",
+                        name, namespace, stack.len()
                     );
 
                     if is_void_element(&name) {
@@ -92,8 +93,37 @@ impl Parser {
                         parent.add_child(comment_node);
                     }
                 }
-                Token::Doctype(_) => {
-                    // Just ignore doctype for now
+                Token::Doctype { name, public_id, system_id, force_quirks } => {
+                    debug!(target: "html", "Found doctype: {:?} (public: {:?}, system: {:?}, quirks: {})",
+                           name, public_id, system_id, force_quirks);
+                    // Store doctype information - could be used for rendering mode detection
+                }
+                Token::CData(content) => {
+                    debug!(target: "html", "Found CDATA section with {} characters", content.len());
+                    let cdata_node = Node::new(NodeType::Text(content));
+                    if let Some(parent) = stack.last_mut() {
+                        parent.add_child(cdata_node);
+                    }
+                }
+                Token::ProcessingInstruction { target, data } => {
+                    debug!(target: "html", "Found processing instruction: <?{} {}>", target, data);
+                    // Processing instructions are typically ignored in HTML rendering
+                }
+                Token::CharacterReference(ref_value) => {
+                    debug!(target: "html", "Found character reference: &#{};", ref_value);
+                    let text_node = Node::new(NodeType::Text(ref_value.clone()));
+                    if let Some(parent) = stack.last_mut() {
+                        parent.add_child(text_node);
+                    }
+                }
+                Token::EntityReference(entity) => {
+                    debug!(target: "html", "Found entity reference: &{};", entity);
+                    // Entity references should be resolved to their character equivalents
+                    let resolved = super::entities::resolve_entity(&entity).unwrap_or(entity.clone());
+                    let text_node = Node::new(NodeType::Text(resolved));
+                    if let Some(parent) = stack.last_mut() {
+                        parent.add_child(text_node);
+                    }
                 }
             }
         }

@@ -80,6 +80,35 @@ fn decode_entity(entity: &str) -> String {
     }.to_string()
 }
 
+pub fn resolve_entity(entity_name: &str) -> Option<String> {
+    match entity_name {
+        "amp" => Some("&".to_string()),
+        "lt" => Some("<".to_string()),
+        "gt" => Some(">".to_string()),
+        "quot" => Some("\"".to_string()),
+        "apos" => Some("'".to_string()),
+        "nbsp" => Some("\u{00A0}".to_string()),
+        "copy" => Some("©".to_string()),
+        "reg" => Some("®".to_string()),
+        "trade" => Some("™".to_string()),
+        "raquo" => Some("»".to_string()),
+        "laquo" => Some("«".to_string()),
+        "mdash" => Some("—".to_string()),
+        "ndash" => Some("–".to_string()),
+        "hellip" => Some("…".to_string()),
+        "bull" => Some("•".to_string()),
+        "deg" => Some("°".to_string()),
+        "frac12" => Some("½".to_string()),
+        "frac14" => Some("¼".to_string()),
+        "frac34" => Some("¾".to_string()),
+        "sup1" => Some("¹".to_string()),
+        "sup2" => Some("²".to_string()),
+        "sup3" => Some("³".to_string()),
+        // Add more common entities as needed
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

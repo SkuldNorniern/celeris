@@ -1,9 +1,13 @@
 use log::{debug, info, warn};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static NODE_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
     node_type: NodeType,
     children: Vec<Node>,
+    id: usize, // Unique ID for each node
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,10 +39,12 @@ pub struct DomTree {
 
 impl Node {
     pub fn new(node_type: NodeType) -> Self {
-        debug!(target: "dom", "Creating new node: {:?}", node_type);
+        let id = NODE_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        debug!(target: "dom", "Creating new node (id: {}): {:?}", id, node_type);
         Self {
             node_type,
             children: Vec::new(),
+            id,
         }
     }
 
@@ -67,6 +73,10 @@ impl Node {
 
     pub fn children(&self) -> &[Node] {
         &self.children
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
     }
     
     pub fn children_mut(&mut self) -> &mut Vec<Node> {
@@ -158,6 +168,7 @@ impl Node {
             _ => false,
         }
     }
+
 
     pub fn debug_print(&self, depth: usize) {
         let indent = "  ".repeat(depth);

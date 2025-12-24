@@ -49,4 +49,8 @@ impl JavaScriptEngine {
     pub fn runtime_mut(&mut self) -> &mut runtime::Runtime {
         &mut self.runtime
     }
+
+    pub fn set_console_log_sender(&mut self, sender: std::sync::mpsc::Sender<(String, String)>) {
+        self.runtime.set_console_log_sender(sender);
+    }
 } 

@@ -5,13 +5,28 @@ pub enum Token {
     StartTag {
         name: String,
         attributes: Vec<Attribute>,
+        self_closing: bool,
+        namespace: Option<String>,
     },
     EndTag {
         name: String,
+        namespace: Option<String>,
     },
     Text(String),
     Comment(String),
-    Doctype(String),
+    Doctype {
+        name: Option<String>,
+        public_id: Option<String>,
+        system_id: Option<String>,
+        force_quirks: bool,
+    },
+    CData(String), // For SVG/MathML
+    ProcessingInstruction {
+        target: String,
+        data: String,
+    },
+    CharacterReference(String), // &#123; or &amp;
+    EntityReference(String), // &amp;
 }
 
 pub struct Tokenizer {
@@ -85,16 +100,27 @@ impl Tokenizer {
             self.position += 1;
         }
 
-        // For script/style tags, capture their content as raw text
+        // Determine namespace based on tag name and context
+        let namespace = self.determine_namespace(&name);
+
+        // Check if self-closing (ends with />)
+        let self_closing = self.peek_back(2) == Some('/') && self.peek_back(1) == Some('>');
+
+        // For script/style/svg/math tags, capture their content as raw text
         let tag_lower = name.to_lowercase();
-        if tag_lower == "script" || tag_lower == "style" {
+        if tag_lower == "script" || tag_lower == "style" || tag_lower == "svg" || tag_lower == "math" {
             if let Some(text_content) = self.consume_raw_text(&tag_lower) {
                 // Store it to be returned as the next token
                 self.pending_text = Some(text_content);
             }
         }
 
-        Some(Token::StartTag { name, attributes })
+        Some(Token::StartTag {
+            name,
+            attributes,
+            self_closing,
+            namespace,
+        })
     }
 
     fn consume_end_tag(&mut self) -> Option<Token> {
@@ -110,7 +136,9 @@ impl Tokenizer {
             self.position += 1;
         }
 
-        Some(Token::EndTag { name })
+        let namespace = self.determine_namespace(&name);
+
+        Some(Token::EndTag { name, namespace })
     }
 
     fn consume_text(&mut self) -> Option<Token> {
@@ -186,6 +214,14 @@ impl Tokenizer {
         if self.current_char() == '-' && self.peek_char() == '-' {
             self.position += 2; // Consume '--'
             self.consume_comment()
+        } else if self.current_char() == '[' {
+            let cdata_check = self.peek_chars(6);
+            if cdata_check == Some("CDATA[".to_string()) {
+                self.position += 6; // Consume "CDATA["
+                self.consume_cdata()
+            } else {
+                self.consume_doctype()
+            }
         } else if self.current_char() == 'D' || self.current_char() == 'd' {
             self.consume_doctype()
         } else {
@@ -219,7 +255,12 @@ impl Tokenizer {
             self.position += 1; // Consume '>'
         }
 
-        Some(Token::Doctype(content))
+        Some(Token::Doctype {
+            name: Some(content),
+            public_id: None,
+            system_id: None,
+            force_quirks: false,
+        })
     }
 
     fn consume_whitespace(&mut self) {
@@ -272,6 +313,70 @@ impl Tokenizer {
             None
         } else {
             Some(content)
+        }
+    }
+
+    fn peek_next(&self) -> Option<char> {
+        if self.position + 1 < self.input.len() {
+            Some(self.input[self.position + 1])
+        } else {
+            None
+        }
+    }
+
+    fn peek_back(&self, offset: usize) -> Option<char> {
+        if self.position >= offset {
+            Some(self.input[self.position - offset])
+        } else {
+            None
+        }
+    }
+
+    fn peek_chars(&self, count: usize) -> Option<String> {
+        if self.position + count <= self.input.len() {
+            Some(self.input[self.position..self.position + count].iter().collect())
+        } else {
+            None
+        }
+    }
+
+    fn consume_cdata(&mut self) -> Option<Token> {
+        let mut content = String::new();
+        while !self.eof() {
+            if self.position + 2 < self.input.len() &&
+               self.input[self.position] == ']' &&
+               self.input[self.position + 1] == ']' &&
+               self.input[self.position + 2] == '>' {
+                self.position += 3; // consume "]]>"
+                break;
+            }
+            content.push(self.consume_char());
+        }
+
+        Some(Token::CData(content))
+    }
+
+    fn determine_namespace(&self, tag_name: &str) -> Option<String> {
+        let tag_lower = tag_name.to_lowercase();
+        match tag_lower.as_str() {
+            // SVG elements
+            "svg" | "g" | "path" | "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon"
+            | "text" | "tspan" | "textpath" | "defs" | "use" | "symbol" | "marker" | "pattern"
+            | "lineargradient" | "radialgradient" | "stop" | "clippath" | "mask" | "filter"
+            | "feblend" | "fecolormatrix" | "fecomponenttransfer" | "fecomposite" | "feconvolvematrix"
+            | "fediffuselighting" | "fedisplacementmap" | "fedistantlight" | "fedropshadow"
+            | "feflood" | "fefunca" | "fefuncb" | "fefuncg" | "fefuncr" | "fegaussianblur"
+            | "feimage" | "femerge" | "femergenode" | "femorphology" | "feoffset" | "fepointlight"
+            | "fespecularlighting" | "fespotlight" | "fetile" | "feturbulence" => Some("svg".to_string()),
+
+            // MathML elements
+            "math" | "mi" | "mn" | "mo" | "ms" | "mtext" | "mspace" | "msline" | "mrow" | "mfrac"
+            | "msqrt" | "mroot" | "mstyle" | "merror" | "mpadded" | "mphantom" | "mfenced" | "menclose"
+            | "msub" | "msup" | "msubsup" | "munder" | "mover" | "munderover" | "mmultiscripts"
+            | "mtable" | "mtr" | "mtd" | "maligngroup" | "malignmark" | "maction" | "mstack" | "mlongdiv"
+            | "msgroup" | "msrow" | "mscarries" | "mscarry" | "msline" => Some("mathml".to_string()),
+
+            _ => None,
         }
     }
 }
