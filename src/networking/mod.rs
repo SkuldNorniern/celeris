@@ -32,13 +32,40 @@ impl NetworkManager {
         }
 
         let cookie_header = self.cookies.lock().await.get_cookie_header(url);
-        let response = self.fetch_with_pool(url, cookie_header.as_deref()).await?;
         
-        // Extract Set-Cookie headers and store them
-        self.cookies.lock().await.extract_cookies(url, &response.headers);
+        // Retry logic: retry up to 3 times on failure
+        const MAX_RETRIES: usize = 3;
+        let mut last_error = None;
         
-        self.cache.lock().await.insert(url, &response);
-        Ok(response)
+        for attempt in 0..MAX_RETRIES {
+            match self.fetch_with_pool(url, cookie_header.as_deref()).await {
+                Ok(response) => {
+                    // Check if response indicates a failure that should be retried
+                    // (e.g., truncated chunked data, decompression failures)
+                    // For now, we'll retry on any error and let fetch_with_pool handle it
+                    
+                    // Extract Set-Cookie headers and store them
+                    self.cookies.lock().await.extract_cookies(url, &response.headers);
+                    
+                    // Cache successful response
+                    self.cache.lock().await.insert(url, &response);
+                    return Ok(response);
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        // Exponential backoff: wait 100ms, 200ms, 400ms
+                        let delay_ms = 100 * (1 << attempt);
+                        log::warn!(target: "network", "Request failed (attempt {}/{}), retrying in {}ms: {}", 
+                            attempt + 1, MAX_RETRIES, delay_ms, last_error.as_ref().unwrap());
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                    }
+                }
+            }
+        }
+        
+        // All retries failed
+        Err(last_error.unwrap())
     }
 
     async fn fetch_with_pool(&self, url: &str, cookie_header: Option<&str>) -> Result<http::Response, NetworkError> {

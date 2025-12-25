@@ -6,7 +6,7 @@ mod networking;
 pub mod rendering;
 mod javascript;
 
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::error::Error;
 
 pub struct Browser {
@@ -354,7 +354,7 @@ impl Browser {
                 attributes,
                 ..
             } => {
-                debug!(target: "browser", "Processing element: {} with {} children", 
+                trace!(target: "browser", "Processing element: {} with {} children", 
                     tag_name, node.children().len());
 
                 // Skip non-content elements

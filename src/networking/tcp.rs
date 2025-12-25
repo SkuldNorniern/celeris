@@ -341,10 +341,12 @@ fn decompress_body(headers: &http::Headers, body: Vec<u8>) -> Result<Vec<u8>, Ne
                     Ok(decompressed)
                 }
                 Err(e) => {
-                    log::warn!(target: "network", "Gzip decompression failed: {}, body len: {}, returning body as-is", e, body.len());
-                    // Fallback: return body as-is in case it's already decompressed
-                    // Some servers incorrectly set Content-Encoding: gzip when body is already plain
-                    Ok(body)
+                    log::warn!(target: "network", "Gzip decompression failed: {}, body len: {}, will retry", e, body.len());
+                    // Return error to trigger retry instead of falling back
+                    // This ensures we get the correct data on retry
+                    Err(NetworkError::ParseError(
+                        format!("Gzip decompression failed: {}, body len: {}", e, body.len())
+                    ))
                 }
             }
         }
@@ -526,12 +528,11 @@ fn decode_chunked_body(input: &[u8], max_decoded_size: usize) -> Result<Vec<u8>,
         };
         
         if chunk_end > input.len() {
-            // Truncated chunk - take what we can
+            // Truncated chunk - return error to trigger retry
             log::warn!(target: "network", "Chunked data truncated (expected {} bytes, have {})", size, input.len() - i);
-            if i < input.len() {
-                out.extend_from_slice(&input[i..]);
-            }
-            break;
+            return Err(NetworkError::ReceiveFailed(
+                format!("Chunked data truncated: expected {} bytes, have {}", size, input.len() - i)
+            ));
         }
 
         out.extend_from_slice(&input[i..chunk_end]);

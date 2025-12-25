@@ -13,6 +13,8 @@ webpki-roots = "0.26.7"
 flate2 = "1.0"
 gpui = { version ="0.2.2", optional = true }
 unicode-segmentation = { version = "1.11", optional = true }
+image = { version = "0.7", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [lints.clippy]
 unwrap_used = "deny"
@@ -24,4 +26,4 @@ opt-level = 3
 
 [features]
 default = []
-gui = ["dep:gpui", "dep:unicode-segmentation"]
+gui = ["dep:gpui", "dep:unicode-segmentation", "dep:image", "dep:base64"]

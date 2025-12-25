@@ -70,7 +70,7 @@ impl AddressBar {
                     Ok(_) => {
                         found = true;
                         log::debug!(target: "address_bar", "Successfully dispatched load_url to BrowserWindow");
-                        break;
+                break;
                     }
                     Err(e) => {
                         log::error!(target: "address_bar", "Failed to update browser window: {:?}", e);

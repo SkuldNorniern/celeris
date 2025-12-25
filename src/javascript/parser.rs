@@ -1,7 +1,7 @@
 use super::ast::{Node, BinaryOperator, UnaryOperator};
 use super::tokenizer::{Token, tokenize};
 use std::error::Error;
-use log::{debug, error};
+use log::{debug, error, trace};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -43,7 +43,7 @@ impl Parser {
     }
 
     fn parse_statement(&mut self) -> Result<Node, Box<dyn Error>> {
-        debug!(target: "javascript", "Parsing statement, current token: {:?}", self.peek());
+        trace!(target: "javascript", "Parsing statement, current token: {:?}", self.peek());
         let stmt = match self.peek() {
             Token::Let | Token::Const | Token::Var => self.parse_variable_declaration()?,
             Token::Function => {
@@ -112,7 +112,7 @@ impl Parser {
                 
                 // Consume optional semicolon
                 if matches!(self.peek(), Token::Semicolon) {
-                    debug!(target: "javascript", "Consuming semicolon after expression");
+                    trace!(target: "javascript", "Consuming semicolon after expression");
                     self.advance();
                 }
                 
@@ -120,7 +120,7 @@ impl Parser {
             }
         };
 
-        debug!(target: "javascript", "Completed parsing statement");
+        trace!(target: "javascript", "Completed parsing statement");
         Ok(stmt)
     }
 
@@ -153,7 +153,7 @@ impl Parser {
 
         // Consume optional semicolon
         if matches!(self.peek(), Token::Semicolon) {
-            debug!(target: "javascript", "Consuming semicolon after variable declaration");
+            trace!(target: "javascript", "Consuming semicolon after variable declaration");
             self.advance();
         }
 
@@ -506,7 +506,7 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Result<Node, Box<dyn Error>> {
-        debug!(target: "javascript", "Parsing expression, current token: {:?}", self.peek());
+        trace!(target: "javascript", "Parsing expression, current token: {:?}", self.peek());
         let mut expr = if matches!(self.peek(), Token::New) {
             self.parse_new_expression()?
         } else {
@@ -573,7 +573,7 @@ impl Parser {
 
         // Handle simple assignment (=)
         if matches!(self.peek(), Token::Equals) {
-            debug!(target: "javascript", "Found assignment operator");
+            trace!(target: "javascript", "Found assignment operator");
             self.advance(); // consume '='
             let value = self.parse_assignment()?;
 
@@ -629,7 +629,7 @@ impl Parser {
     }
 
     fn parse_logical(&mut self) -> Result<Node, Box<dyn Error>> {
-        debug!(target: "javascript", "Parsing logical expression");
+        trace!(target: "javascript", "Parsing logical expression");
         let mut expr = self.parse_logical_and()?;
 
         while matches!(self.peek(), Token::DoublePipe) {
@@ -915,7 +915,7 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Node, Box<dyn Error>> {
-        debug!(target: "javascript", "Parsing primary expression, current token: {:?}", self.peek());
+        trace!(target: "javascript", "Parsing primary expression, current token: {:?}", self.peek());
         let mut expr = match self.peek() {
             Token::LeftBrace => {
                 debug!(target: "javascript", "Found object literal start");
@@ -1164,7 +1164,7 @@ impl Parser {
             Token::Number(n) => {
                 let n = *n;
                 self.advance();
-                debug!(target: "javascript", "Found number literal: {}", n);
+                trace!(target: "javascript", "Found number literal: {}", n);
                 Ok::<Node, Box<dyn Error>>(Node::Number(n))?
             },
             Token::String(s) => {
@@ -1176,7 +1176,7 @@ impl Parser {
             Token::Identifier(name) => {
                 let name = name.clone();
                 self.advance();
-                debug!(target: "javascript", "Found identifier: {}", name);
+                trace!(target: "javascript", "Found identifier: {}", name);
                 Ok::<Node, Box<dyn Error>>(Node::Identifier(name))?
             },
             Token::True => {
@@ -1254,7 +1254,7 @@ impl Parser {
                         }
                     }
                     
-                    debug!(target: "javascript", "Completed array literal with {} elements", elements.len());
+                    trace!(target: "javascript", "Completed array literal with {} elements", elements.len());
                     Ok::<Node, Box<dyn Error>>(Node::ArrayLiteral(elements))?
                 }
             },
@@ -1505,10 +1505,10 @@ impl Parser {
                         }
                     }
                     
-                    log::info!(target: "javascript", "Parser: Completed function call with {} arguments", arguments.len());
+                    log::trace!(target: "javascript", "Parser: Completed function call with {} arguments", arguments.len());
                     for (i, arg) in arguments.iter().enumerate() {
                         let is_func = matches!(arg, Node::FunctionExpr { .. });
-                        log::info!(target: "javascript", "Parser: Argument {} is FunctionExpr: {}", i, is_func);
+                        log::trace!(target: "javascript", "Parser: Argument {} is FunctionExpr: {}", i, is_func);
                     }
                     expr = Node::CallExpr {
                         callee: Box::new(expr),

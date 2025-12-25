@@ -5,7 +5,13 @@ use std::sync::mpsc;
 actions!(window, [ToggleDevPanel, LoadUrl]);
 
 pub enum LoadResult {
-    Success { url: String, content: String, display_list: crate::rendering::DisplayList, console_logs: Vec<(String, String)> },
+    Success { 
+        url: String, 
+        content: String, 
+        display_list: crate::rendering::DisplayList, 
+        console_logs: Vec<(String, String)>,
+        images: Vec<(String, Vec<u8>)>,  // (URL, image_data)
+    },
     Error(String),
 }
 
@@ -127,7 +133,50 @@ impl BrowserWindow {
                             console_logs.push((level, message));
                         }
                         
-                        match tx.send(LoadResult::Success { url: url_clone.clone(), content, display_list, console_logs }) {
+                        // Fetch images from display list
+                        let mut images = Vec::new();
+                        // Create a new NetworkManager for fetching images (since it's not Clone)
+                        if let Ok(image_network_manager) = crate::networking::NetworkManager::new() {
+                            for item in display_list.items() {
+                                if let crate::rendering::DisplayItem::Image { url, .. } = item {
+                                    if !url.is_empty() {
+                                        // Resolve relative URL
+                                        let image_url = if url.starts_with("http://") || url.starts_with("https://") {
+                                            url.clone()
+                                        } else {
+                                            // Resolve relative to base URL
+                                            let base = url_clone.trim_end_matches('/');
+                                            if url.starts_with('/') {
+                                                format!("{}{}", base, url)
+                                            } else {
+                                                format!("{}/{}", base, url)
+                                            }
+                                        };
+                                        
+                                        // Fetch image
+                                        match image_network_manager.fetch(&image_url).await {
+                                            Ok(response) => {
+                                                log::info!(target: "browser", "Fetched image: {} ({} bytes)", image_url, response.body.len());
+                                                images.push((image_url, response.body));
+                                            }
+                                            Err(e) => {
+                                                log::warn!(target: "browser", "Failed to fetch image {}: {}", image_url, e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            log::warn!(target: "browser", "Failed to create NetworkManager for image fetching");
+                        }
+                        
+                        match tx.send(LoadResult::Success { 
+                            url: url_clone.clone(), 
+                            content, 
+                            display_list, 
+                            console_logs,
+                            images,
+                        }) {
                             Ok(_) => log::info!(target: "browser", "Sent success result to UI thread"),
                             Err(e) => log::error!(target: "browser", "Failed to send result: {}", e),
                         }
@@ -162,7 +211,7 @@ impl Render for BrowserWindow {
                 Ok(result) => {
                     log::info!(target: "browser", "Received load result in render");
                     match result {
-                        LoadResult::Success { url, content, display_list, console_logs } => {
+                        LoadResult::Success { url, content, display_list, console_logs, images } => {
                             let item_count = display_list.items().len();
                             let content_len = content.len();
                             log::info!(target: "browser", "Load success: content len={}, display_list items={}", 
@@ -181,6 +230,13 @@ impl Render for BrowserWindow {
                                 cv.set_layout_viewport_size(DEFAULT_VIEWPORT_WIDTH as f32, DEFAULT_VIEWPORT_HEIGHT as f32);
                                 // Set current URL for resolving relative image URLs
                                 cv.set_current_url(&url_for_resolution);
+                                
+                                // Store fetched images in cache
+                                log::info!(target: "browser", "Storing {} images in cache", images.len());
+                                for (image_url, image_data) in images {
+                                    log::debug!(target: "browser", "Caching image: {} ({} bytes)", image_url, image_data.len());
+                                    cv.set_image_data(image_url, image_data);
+                                }
                             });
                             self.dev_panel.update(cx, |panel, _cx| {
                                 panel.add_log_from_string(super::dev_panel::LogLevel::Info, 

@@ -79,7 +79,7 @@ pub enum Token {
 }
 
 pub fn tokenize(source: &str) -> Vec<Token> {
-    debug!(target: "javascript", "Starting tokenization of source: {:?}", source);
+    log::trace!(target: "javascript", "Starting tokenization of source: {:?}", source);
     let mut tokens = Vec::new();
     let mut chars = source.chars().peekable();
     
@@ -120,7 +120,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                     }
                 }
                 
-                debug!(target: "javascript", "Found string literal: {:?}", string);
+                log::trace!(target: "javascript", "Found string literal: {:?}", string);
                 tokens.push(Token::String(string));
             },
             
@@ -135,7 +135,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                     }
                 }
                 let parsed = number.parse().unwrap_or(0.0);
-                debug!(target: "javascript", "Found number: {}", parsed);
+                log::trace!(target: "javascript", "Found number: {}", parsed);
                 tokens.push(Token::Number(parsed));
             },
             
@@ -180,7 +180,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                     "void" => Token::Void,
                     _ => Token::Identifier(ident.clone()),
                 };
-                debug!(target: "javascript", "Found identifier/keyword: {} -> {:?}", ident, token);
+                log::trace!(target: "javascript", "Found identifier/keyword: {} -> {:?}", ident, token);
                 tokens.push(token);
             },
             
@@ -267,7 +267,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                     '/' => {
                         chars.next();
                         if chars.peek() == Some(&'/') {
-                            debug!(target: "javascript", "Found single-line comment");
+                            log::trace!(target: "javascript", "Found single-line comment");
                             chars.next();
                             while let Some(&c) = chars.peek() {
                                 if c == '\n' {
@@ -277,7 +277,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                             }
                             continue;
                         } else if chars.peek() == Some(&'*') {
-                            debug!(target: "javascript", "Found multi-line comment");
+                            log::trace!(target: "javascript", "Found multi-line comment");
                             chars.next();
                             while let Some(&c) = chars.peek() {
                                 if c == '*' {
@@ -362,7 +362,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                     },
                     _ => unreachable!(),
                 };
-                debug!(target: "javascript", "Found operator/punctuation: {:?}", token);
+                log::trace!(target: "javascript", "Found operator/punctuation: {:?}", token);
                 tokens.push(token);
             },
             
@@ -370,13 +370,13 @@ pub fn tokenize(source: &str) -> Vec<Token> {
             c => {
                 // Many real-world scripts contain tokens we don't support yet (template strings, etc).
                 // Logging each character at WARN is too noisy and slows down page loads.
-                debug!(target: "javascript", "Skipping unknown character: {:?}", c);
+                log::trace!(target: "javascript", "Skipping unknown character: {:?}", c);
                 chars.next();
             }
         }
     }
     
     tokens.push(Token::EOF);
-    debug!(target: "javascript", "Tokenization complete. Tokens: {:?}", tokens);
+    log::trace!(target: "javascript", "Tokenization complete. Tokens: {:?}", tokens);
     tokens
 } 

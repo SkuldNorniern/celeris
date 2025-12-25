@@ -63,14 +63,14 @@ impl Runtime {
         // We wrap it in Rc<RefCell<>> to allow shared mutable access
         // Note: This creates a clone of the DOM node, but we'll work with it
         self.dom_root = Some(Rc::new(RefCell::new(dom_root.clone())));
-        debug!(target: "javascript", "DOM bound to JavaScript runtime");
+        log::trace!(target: "javascript", "DOM bound to JavaScript runtime");
     }
     
     pub fn bind_dom_shared(&mut self, dom_root: Rc<RefCell<DomNode>>) {
         // Store the shared reference to the actual DOM root
         // This allows JavaScript to modify the real DOM
         self.dom_root = Some(dom_root);
-        debug!(target: "javascript", "Shared DOM bound to JavaScript runtime");
+        log::trace!(target: "javascript", "Shared DOM bound to JavaScript runtime");
     }
     
     pub fn fire_dom_content_loaded(&mut self) -> Result<(), Box<dyn Error>> {
@@ -85,7 +85,7 @@ impl Runtime {
         
         for listener in listeners {
             if let JsValue::Function(func) = listener {
-                log::info!(target: "javascript", "Calling DOMContentLoaded listener");
+                debug!(target: "javascript", "Calling DOMContentLoaded listener");
                 self.call_function(&func, &[event_value.clone()])?;
             }
         }
@@ -480,21 +480,21 @@ impl Runtime {
             }
             
             Node::MemberExpr { object, property, computed } => {
-                debug!(target: "javascript", "Evaluating member expression");
+                log::trace!(target: "javascript", "Evaluating member expression");
                 let obj = self.evaluate_node(object)?;
-                debug!(target: "javascript", "Object evaluated to: {:?}", obj);
+                log::trace!(target: "javascript", "Object evaluated to: {:?}", obj);
                 let prop = if *computed {
                     self.evaluate_node(property)?
                 } else {
                     if let Node::Identifier(name) = &**property {
-                        debug!(target: "javascript", "Property name: {}", name);
+                        log::trace!(target: "javascript", "Property name: {}", name);
                         JsValue::String(name.clone())
                     } else {
                         return Err("Invalid property in member expression".into());
                     }
                 };
                 let result = self.get_property(&obj, &prop)?;
-                debug!(target: "javascript", "Member expression {}.{} = {:?}", 
+                log::trace!(target: "javascript", "Member expression {}.{} = {:?}", 
                     self.js_value_to_string(&obj), 
                     self.js_value_to_string(&prop),
                     result);
@@ -502,46 +502,35 @@ impl Runtime {
             }
             
             Node::Identifier(name) => {
-                if name == "do_capabilities_detection" {
-                    log::info!(target: "javascript", "Looking up variable: {}", name);
-                } else {
-                    debug!(target: "javascript", "Looking up variable: {}", name);
-                }
+                log::trace!(target: "javascript", "Looking up variable: {}", name);
                 if let Some(scope) = self.find_scope_with_variable(name) {
                     let value = scope.variables.get(name).unwrap().clone();
-                    if name == "do_capabilities_detection" {
-                        log::info!(target: "javascript", "Found variable '{}': {:?}", name, matches!(value, JsValue::Function(_)));
-                    }
+                    log::trace!(target: "javascript", "Found variable '{}': {:?}", name, matches!(value, JsValue::Function(_)));
                     Ok(value)
                 } else {
                     // If not found in scope, check window object (window properties are global)
                     if let Some(window_val) = self.get_variable("window") {
                         if let JsValue::Object(window_obj) = window_val {
                             if let Some(prop_val) = window_obj.borrow().get_property(name) {
-                                if name == "do_capabilities_detection" {
-                                    log::info!(target: "javascript", "Found '{}' on window object: {:?}", name, matches!(prop_val, JsValue::Function(_)));
-                                }
+                                log::trace!(target: "javascript", "Found '{}' on window object: {:?}", name, matches!(prop_val, JsValue::Function(_)));
                                 return Ok(prop_val.clone());
                             }
                         }
                     }
-                    if name == "do_capabilities_detection" {
-                        // This is expected - the function may not be defined yet, we'll create a stub
-                        debug!(target: "javascript", "Variable '{}' not found in scope or window (will be handled by browser)", name);
-                    } else {
-                        debug!(target: "javascript", "Variable not found: {}", name);
-                    }
+                    // Variable not found - this is expected for some cases
+                    // The browser will handle undefined variables (e.g., do_capabilities_detection)
+                    log::warn!(target: "javascript", "Variable '{}' not found in scope or window (will be handled by browser)", name);
                     Ok(JsValue::Undefined)
                 }
             }
             
             Node::ObjectLiteral(properties) => {
-                debug!(target: "javascript", "Evaluating object literal with {} properties", properties.len());
+                log::trace!(target: "javascript", "Evaluating object literal with {} properties", properties.len());
                 let obj = Rc::new(RefCell::new(JsObject::new()));
                 
                 for (key, value_node) in properties {
                     let value = self.evaluate_node(value_node)?;
-                    debug!(target: "javascript", "Setting object property '{}' to {:?}", key, value);
+                    log::trace!(target: "javascript", "Setting object property '{}' to {:?}", key, value);
                     obj.borrow_mut().set_property(key.clone(), value);
                 }
                 
@@ -549,7 +538,7 @@ impl Runtime {
             }
             
             Node::CallExpr { callee, arguments } => {
-                debug!(target: "javascript", "Evaluating call expression with {} arguments", arguments.len());
+                log::trace!(target: "javascript", "Evaluating call expression with {} arguments", arguments.len());
                 let callee_value = self.evaluate_node(callee)?;
                 
                 // Evaluate all arguments
@@ -564,7 +553,7 @@ impl Runtime {
                     log::trace!(target: "javascript", "Call argument {} evaluated to: is_function={}, value={:?}", i, is_function_value, arg_val);
                     // Simple summary at debug level
                     if is_function_expr || is_function_value {
-                        debug!(target: "javascript", "Call argument {} is a function", i);
+                        log::trace!(target: "javascript", "Call argument {} is a function", i);
                     }
                     arg_values.push(arg_val);
                 }
@@ -572,15 +561,15 @@ impl Runtime {
                 match callee_value {
                     JsValue::NativeFunction(name) => {
                         // Handle built-in functions
-                        debug!(target: "javascript", "Calling native function: {}", name);
+                        log::trace!(target: "javascript", "Calling native function: {}", name);
                         self.call_native_function(&name, &arg_values)
                     }
                     JsValue::Function(func) => {
                         // Call user-defined function
                         if let Node::Identifier(name) = &**callee {
-                            log::info!(target: "javascript", "Calling user-defined function '{}'", name);
+                            log::trace!(target: "javascript", "Calling user-defined function '{}'", name);
                         } else {
-                            debug!(target: "javascript", "Calling user-defined function");
+                            log::trace!(target: "javascript", "Calling user-defined function");
                         }
                         self.call_function(&func, &arg_values)
                     }
@@ -593,7 +582,7 @@ impl Runtime {
                     }
                     _ => {
                         // Non-function value called - return undefined instead of error
-                        debug!(target: "javascript", "Attempted to call non-function: {:?}", callee_value);
+                        log::warn!(target: "javascript", "Attempted to call non-function: {:?}", callee_value);
                         Ok(JsValue::Undefined)
                     }
                 }
@@ -811,7 +800,13 @@ impl Runtime {
                     }
                     message.push_str(&self.js_value_to_string(arg));
                 }
-                print!("[JS console.log] {}\n", message);
+                
+                // Use logger instead of println!
+                if name == "console.info" {
+                    log::info!(target: "js-console", "{}", message);
+                } else {
+                    log::info!(target: "js-console", "{}", message);
+                }
                 
                 // Send to console log channel if available
                 if let Some(ref sender) = self.console_log_sender {
@@ -829,7 +824,9 @@ impl Runtime {
                     }
                     message.push_str(&self.js_value_to_string(arg));
                 }
-                print!("[JS console.warn] {}\n", message);
+                
+                // Use logger instead of println!
+                log::warn!(target: "js-console", "{}", message);
                 
                 // Send to console log channel if available
                 if let Some(ref sender) = self.console_log_sender {
@@ -846,7 +843,9 @@ impl Runtime {
                     }
                     message.push_str(&self.js_value_to_string(arg));
                 }
-                print!("[JS console.error] {}\n", message);
+                
+                // Use logger instead of println!
+                log::error!(target: "js-console", "{}", message);
                 
                 // Send to console log channel if available
                 if let Some(ref sender) = self.console_log_sender {
@@ -863,7 +862,9 @@ impl Runtime {
                     }
                     message.push_str(&self.js_value_to_string(arg));
                 }
-                print!("[JS console.debug] {}\n", message);
+                
+                // Use logger instead of println!
+                log::debug!(target: "js-console", "{}", message);
                 
                 // Send to console log channel if available
                 if let Some(ref sender) = self.console_log_sender {
@@ -897,12 +898,12 @@ impl Runtime {
                     JsValue::String(s) => Some(s.as_str()),
                     _ => None,
                 }) {
-                    log::info!(target: "javascript", "querySelector('{}') called", selector);
+                    log::trace!(target: "javascript", "querySelector('{}') called", selector);
                     // Simple selector support: #id, .class, tag
                     if selector.starts_with('#') {
                         let id = &selector[1..];
                         if self.find_element_by_id_in_shared_dom(id) {
-                            log::info!(target: "javascript", "querySelector('#{}') found element", id);
+                            log::trace!(target: "javascript", "querySelector('#{}') found element", id);
                             Ok(self.create_element_object_with_id(id.to_string()))
                         } else {
                             log::warn!(target: "javascript", "querySelector('#{}') did not find element", id);
@@ -969,7 +970,7 @@ impl Runtime {
                 } else {
                     log::warn!(target: "javascript", "addEventListener called with insufficient args");
                 }
-                debug!(target: "javascript", "addEventListener called (non-DOMContentLoaded or wrong format)");
+                log::trace!(target: "javascript", "addEventListener called (non-DOMContentLoaded or wrong format)");
                 Ok(JsValue::Undefined)
             }
             "element.addEventListener" => {
@@ -1074,7 +1075,7 @@ impl Runtime {
                 }
             }
             _ => {
-                debug!(target: "javascript", "Unknown native function: {}", name);
+                log::warn!(target: "javascript", "Unknown native function: {}", name);
                 Ok(JsValue::Undefined)
             }
         }
@@ -1306,7 +1307,7 @@ impl Runtime {
         self.property_access_depth += 1;
         
         let result = {
-            debug!(target: "javascript", "Setting property {:?} = {:?} on value {:?}", prop, value, obj);
+            log::trace!(target: "javascript", "Setting property {:?} = {:?} on value {:?}", prop, value, obj);
             match obj {
                 JsValue::Object(obj_ref) => {
                     let prop_name = match prop {
@@ -1366,7 +1367,7 @@ impl Runtime {
                 }
                 _ => {
                     // In JavaScript, setting properties on primitives silently fails
-                    debug!(target: "javascript", "Ignoring property set on non-object: {:?}", obj);
+                    log::trace!(target: "javascript", "Ignoring property set on non-object: {:?}", obj);
                     Ok(())
                 }
             }
@@ -1379,14 +1380,14 @@ impl Runtime {
     fn set_dom_text_content(&self, node: &mut DomNode, text: &str) {
         // Use the DOM node's method to set text content
         node.set_text_content(text);
-        debug!(target: "javascript", "Set text content to: {}", text);
+        log::trace!(target: "javascript", "Set text content to: {}", text);
     }
     
     fn set_dom_inner_html(&self, node: &mut DomNode, html: &str) {
         // For now, treat innerHTML as textContent
         // TODO: Parse HTML and create proper DOM nodes
         node.set_text_content(html);
-        debug!(target: "javascript", "Set innerHTML to: {}", html);
+        log::trace!(target: "javascript", "Set innerHTML to: {}", html);
     }
 
     // DOM search helper methods - check if elements exist in the shared DOM
@@ -1686,12 +1687,12 @@ impl Runtime {
             JsValue::Undefined | JsValue::Null => {
                 // In JavaScript, accessing properties on null/undefined is a TypeError
                 // But we'll be lenient and return undefined
-                debug!(target: "javascript", "Property access on null/undefined");
+                log::trace!(target: "javascript", "Property access on null/undefined");
                 Ok(JsValue::Undefined)
             }
             _ => {
                 // Other primitive types - return undefined
-                debug!(target: "javascript", "Property access on primitive: {:?}", obj);
+                log::trace!(target: "javascript", "Property access on primitive: {:?}", obj);
                 Ok(JsValue::Undefined)
             }
         }

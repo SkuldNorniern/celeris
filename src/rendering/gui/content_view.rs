@@ -1,5 +1,7 @@
 use crate::rendering::{DisplayList, DisplayItem, Color};
 use gpui::{div, prelude::*, Entity, IntoElement, Context, px};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub struct ContentView {
     loaded: bool,
@@ -10,6 +12,7 @@ pub struct ContentView {
     layout_viewport_width: f32,  // Viewport width used for layout
     layout_viewport_height: f32,  // Viewport height used for layout
     current_url: String,  // Current page URL for resolving relative image URLs
+    image_cache: HashMap<String, Vec<u8>>,  // Cache of fetched image data (URL -> raw bytes)
 }
 
 impl ContentView {
@@ -23,6 +26,7 @@ impl ContentView {
             layout_viewport_width: 1200.0,  // Default layout viewport
             layout_viewport_height: 800.0,
             current_url: String::new(),
+            image_cache: HashMap::new(),
         })
     }
 
@@ -41,7 +45,7 @@ impl ContentView {
         self.page_content.clear();
         self.display_list = None;
     }
-
+    
     pub fn set_loading_progress(&mut self, progress: f32) {
         self.loading_progress = progress.clamp(0.0, 1.0);
     }
@@ -76,6 +80,15 @@ impl ContentView {
     
     pub fn set_current_url(&mut self, url: &str) {
         self.current_url = url.to_string();
+    }
+    
+    pub fn set_image_data(&mut self, url: String, data: Vec<u8>) {
+        log::debug!(target: "content_view", "Caching image data for URL: {} ({} bytes)", url, data.len());
+        self.image_cache.insert(url, data);
+    }
+    
+    pub fn get_image_data(&self, url: &str) -> Option<&Vec<u8>> {
+        self.image_cache.get(url)
     }
     
     // Resolve relative URL to absolute URL based on current page URL
@@ -166,24 +179,24 @@ impl gpui::Render for ContentView {
                         .text_sm()
                         .child(self.loading_text.clone())
                 )
-                .child(
-                    div()
-                        .w_64()
-                        .h_1()
-                        .bg(gpui::rgb(0xe0e0e0))
-                        .rounded_full()
-                        .relative()
-                        .overflow_hidden()
-                        .shadow_sm()
                         .child(
                             div()
-                                .absolute()
-                                .left(px(0.0))
-                                .top(px(0.0))
-                                .h_full()
-                                .w(px(self.loading_progress * 256.0))
-                                .bg(gpui::rgb(0x4285f4))
+                                .w_64()
+                                .h_1()
+                                .bg(gpui::rgb(0xe0e0e0))
                                 .rounded_full()
+                                .relative()
+                        .overflow_hidden()
+                        .shadow_sm()
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left(px(0.0))
+                                        .top(px(0.0))
+                                        .h_full()
+                                        .w(px(self.loading_progress * 256.0))
+                                        .bg(gpui::rgb(0x4285f4))
+                                        .rounded_full()
                         )
                 );
         }
@@ -206,17 +219,17 @@ impl gpui::Render for ContentView {
                         if *width > 0.0 && *height > 0.0 {
                             let rgb = Self::color_to_rgb(color);
                             if rgb != 0xffffff {
-                                container = container.child(
-                                    div()
-                                        .absolute()
+                            container = container.child(
+                                div()
+                                    .absolute()
                                         .left(px(*x * scale))
                                         .top(px(*y * scale))
                                         .w(px(*width * scale))
                                         .h(px(*height * scale))
                                         .bg(gpui::rgb(rgb))
-                                        .border(px(0.5))
-                                        .border_color(gpui::rgb(0xe0e0e0))
-                                );
+                                    .border(px(0.5))
+                                    .border_color(gpui::rgb(0xe0e0e0))
+                            );
                             }
                         }
                     }
@@ -245,43 +258,211 @@ impl gpui::Render for ContentView {
                         let scaled_height = (*height * scale).max(1.0);
                         let alt_text = alt.clone();
                         
-                        // GPUI's img() function doesn't support remote HTTP/HTTPS URLs
-                        // For now, render a placeholder with the image URL information
-                        // TODO: Implement image fetching and rendering when GPUI supports it
-                        // or implement custom image loading using the networking module
-                        let placeholder_text: String = if alt_text.is_empty() { 
-                            if image_url.len() > 40 {
-                                format!("Image\n{}...", &image_url[..40])
-                            } else {
-                                format!("Image\n{}", image_url)
-                            }
-                        } else { 
-                            alt_text.to_string() 
-                        };
+                        // Check if we have cached image data and render using GPUI img()
+                        log::info!(target: "content_view", "Checking cache for image URL: '{}'", image_url);
+                        log::info!(target: "content_view", "Cache has {} images. All keys: {:?}", 
+                            self.image_cache.len(),
+                            self.image_cache.keys().collect::<Vec<_>>());
                         
-                        container = container.child(
-                            div()
-                                .absolute()
-                                .left(px(*x * scale))
-                                .top(px(*y * scale))
-                                .w(px(scaled_width))
-                                .h(px(scaled_height))
-                                .bg(gpui::rgb(0xf0f0f0))
-                                .border(px(1.0))
-                                .border_color(gpui::rgb(0xcccccc))
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .justify_center()
-                                .text_color(gpui::rgb(0x666666))
-                                .text_xs()
-                                .p_2()
-                                .child(
-                                    div()
-                                        .text_center()
-                                        .child(placeholder_text)
-                                )
-                        );
+                        // Try to find image in cache - check exact match first, then try all cache keys
+                        // This handles URL resolution mismatches between fetching and lookup
+                        let cached_data = self.get_image_data(&image_url)
+                            .or_else(|| {
+                                // Try with trailing slash removed
+                                let url_no_slash = image_url.trim_end_matches('/');
+                                if url_no_slash != image_url {
+                                    self.get_image_data(url_no_slash)
+                                } else {
+                                    None
+                                }
+                            })
+                            .or_else(|| {
+                                // Try with trailing slash added
+                                if !image_url.ends_with('/') {
+                                    self.get_image_data(&format!("{}/", image_url))
+                                } else {
+                                    None
+                                }
+                            })
+                            .or_else(|| {
+                                // Last resort: try to find any cache entry that ends with the same path
+                                // This handles cases where the domain might differ but path is the same
+                                let url_path = if let Some(path_start) = image_url.rfind('/') {
+                                    &image_url[path_start..]
+                                } else {
+                                    &image_url
+                                };
+                                
+                                self.image_cache.iter()
+                                    .find(|(key, _)| key.ends_with(url_path))
+                                    .map(|(_, data)| data)
+                            });
+                        
+                        if let Some(image_data) = cached_data {
+                            log::info!(target: "content_view", "Found cached image data for '{}' ({} bytes)", image_url, image_data.len());
+                            // Decode image using image crate
+                            // Note: image crate is available when gui feature is enabled
+                            {
+                                // image 0.7 API - use open() directly
+                                log::info!(target: "content_view", "Attempting to decode image data ({} bytes)", image_data.len());
+                                // image 0.7 API - use load_from_memory
+                                let decode_result = image::load_from_memory(image_data)
+                                    .map_err(|e| {
+                                        log::error!(target: "content_view", "Failed to decode image: {}", e);
+                                        format!("Failed to decode image: {}", e)
+                                    });
+                                
+                                match decode_result {
+                                    Ok(decoded_image) => {
+                                        // Convert to rgba8 buffer for consistent handling (image 0.7 API)
+                                        // DynamicImage needs to be converted - use as_rgba8() or match on variants
+                                        let rgba_img = match decoded_image {
+                                            image::DynamicImage::ImageRgba8(img) => img,
+                                            _ => decoded_image.to_rgba(),
+                                        };
+                                        let img_width = rgba_img.width();
+                                        let img_height = rgba_img.height();
+                                        log::info!(target: "content_view", "Successfully decoded image: {}x{}", 
+                                            img_width, img_height);
+                                        // Save image to temporary file and use GPUI's ImageSource
+                                        use std::fs;
+                                        
+                                        // Create temp directory if it doesn't exist
+                                        let temp_dir = std::env::temp_dir().join("celeris_images");
+                                        if let Err(e) = fs::create_dir_all(&temp_dir) {
+                                            log::warn!(target: "content_view", "Failed to create temp dir: {}", e);
+                                        }
+                                        
+                                        // Generate unique filename from URL hash
+                                        use std::collections::hash_map::DefaultHasher;
+                                        use std::hash::{Hash, Hasher};
+                                        let mut hasher = DefaultHasher::new();
+                                        image_url.hash(&mut hasher);
+                                        let hash = hasher.finish();
+                                        let temp_file = temp_dir.join(format!("img_{:x}.png", hash));
+                                        
+                                        // Save image as PNG to file (image 0.7 API)
+                                        match rgba_img.save(&temp_file) {
+                                            Ok(_) => {
+                                                // Get file size for logging
+                                                if let Ok(metadata) = fs::metadata(&temp_file) {
+                                                    let file_size = metadata.len();
+                                                    log::info!(target: "content_view", "Saved image to temp file: {:?} ({} bytes)", temp_file, file_size);
+                                                } else {
+                                                    log::info!(target: "content_view", "Saved image to temp file: {:?}", temp_file);
+                                                }
+                                                
+                                                // Use GPUI's img() with file path string
+                                                let file_path_str = temp_file.to_string_lossy().to_string();
+                                                
+                                                log::info!(target: "content_view", "Rendering image using GPUI img() at x={}, y={}, size {}x{}", 
+                                                    *x * scale, *y * scale, scaled_width, scaled_height);
+                                                
+                                                container = container.child(
+                                                    div()
+                                                        .absolute()
+                                                        .left(px(*x * scale))
+                                                        .top(px(*y * scale))
+                                                        .w(px(scaled_width))
+                                                        .h(px(scaled_height))
+                                                        .child(
+                                                            gpui::img(file_path_str)
+                                                                .w(px(scaled_width))
+                                                                .h(px(scaled_height))
+                                                                .object_fit(gpui::ObjectFit::Contain)
+                                                        )
+                                                );
+                                            }
+                                            Err(e) => {
+                                                log::warn!(target: "content_view", "Failed to save image to temp file: {}", e);
+                                                // Fallback to placeholder
+                                                let placeholder_text = format!("File Error\n{}", alt_text);
+                                                container = container.child(
+                                                    div()
+                                                        .absolute()
+                                                        .left(px(*x * scale))
+                                                        .top(px(*y * scale))
+                                                        .w(px(scaled_width))
+                                                        .h(px(scaled_height))
+                                                        .bg(gpui::rgb(0xf0f0f0))
+                                                        .border(px(1.0))
+                                                        .border_color(gpui::rgb(0xcccccc))
+                                                        .flex()
+                                                        .flex_col()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .text_color(gpui::rgb(0x666666))
+                                                        .text_xs()
+                                                        .p_2()
+                                                        .child(placeholder_text)
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::warn!(target: "content_view", "Failed to decode image: {}", e);
+                                        // Fallback to placeholder
+                                        let placeholder_text = format!("Decode Error\n{}", alt_text);
+                                        container = container.child(
+                                            div()
+                                                .absolute()
+                                                .left(px(*x * scale))
+                                                .top(px(*y * scale))
+                                                .w(px(scaled_width))
+                                                .h(px(scaled_height))
+                                                .bg(gpui::rgb(0xf0f0f0))
+                                                .border(px(1.0))
+                                                .border_color(gpui::rgb(0xcccccc))
+                                                .flex()
+                                                .flex_col()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_color(gpui::rgb(0x666666))
+                                                .text_xs()
+                                                .p_2()
+                                                .child(placeholder_text)
+                                        );
+                                    }
+                                }
+                            }
+                            // Note: image crate is always available when gui feature is enabled
+                            // No fallback needed - if decoding fails, error handling above will show placeholder
+                        } else {
+                            // No cached image data - show loading placeholder
+                            let placeholder_text: String = if alt_text.is_empty() { 
+                                if image_url.len() > 40 {
+                                    format!("Loading...\n{}...", &image_url[..40])
+                                } else {
+                                    format!("Loading...\n{}", image_url)
+                                }
+                            } else { 
+                                format!("Loading...\n{}", alt_text)
+                            };
+                            
+                            container = container.child(
+                                div()
+                                    .absolute()
+                                    .left(px(*x * scale))
+                                    .top(px(*y * scale))
+                                    .w(px(scaled_width))
+                                    .h(px(scaled_height))
+                                    .bg(gpui::rgb(0xf0f0f0))
+                                    .border(px(1.0))
+                                    .border_color(gpui::rgb(0xcccccc))
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_color(gpui::rgb(0x666666))
+                                    .text_xs()
+                                    .p_2()
+                                    .child(
+                                        div()
+                                            .text_center()
+                                            .child(placeholder_text)
+                                    )
+                            );
+                        }
                     }
                 }
                 
