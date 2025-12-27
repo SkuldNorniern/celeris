@@ -10,6 +10,8 @@ mod toolbar;
 mod content_view;
 #[cfg(feature = "gui")]
 mod dev_panel;
+#[cfg(feature = "gui")]
+mod skia;
 
 #[cfg(feature = "gui")]
 pub use app::BrowserApp;

@@ -601,7 +601,7 @@ impl Parser {
                 Token::MinusEquals => BinaryOperator::Subtract,
                 _ => unreachable!(),
             };
-            debug!(target: "javascript", "Found compound assignment operator: {:?}", op);
+            trace!(target: "javascript", "Found compound assignment operator: {:?}", op);
             self.advance(); // consume the compound operator
             let value = self.parse_assignment()?;
             
@@ -1060,7 +1060,7 @@ impl Parser {
                         Token::Function | Token::Bang | Token::Ampersand | Token::Pipe => {
                             // Operators or function keyword - try to parse as expression value
                             let token_type = format!("{:?}", self.peek());
-                            debug!(target: "javascript", "Object literal: found {} after key, parsing as expression value", token_type);
+                            trace!(target: "javascript", "Object literal: found {} after key, parsing as expression value", token_type);
                             let value = self.parse_expression()?;
                             properties.push((key, Box::new(value)));
                             
@@ -1074,7 +1074,7 @@ impl Parser {
                             // Statement-level tokens found in object literal - likely syntax error or object boundary issue
                             // Exit object literal parsing gracefully
                             let token_type = format!("{:?}", self.peek());
-                            debug!(target: "javascript", "Object literal: found statement token {}, ending object literal", token_type);
+                            trace!(target: "javascript", "Object literal: found statement token {}, ending object literal", token_type);
                             break;
                         },
                         token => {

@@ -303,7 +303,17 @@ impl Render for BrowserWindow {
                     .flex_1()
                     .bg(gpui::rgb(0xffffff))
                     .relative()
-                    .child(self.content_view.clone())
+                    .child(
+                        // Scrollable content area - matches GPUI scrollable.rs pattern
+                        // Using style() to manually set overflow - workaround since overflow_scroll() requires StatefulInteractiveElement
+                        // Inner content: h(px(content_height)) exceeds viewport
+                        {
+                            let mut scroll_container = div().size_full().relative();
+                            scroll_container.style().overflow.x = Some(gpui::Overflow::Scroll);
+                            scroll_container.style().overflow.y = Some(gpui::Overflow::Scroll);
+                            scroll_container.child(self.content_view.clone())
+                        }
+                    )
                     .child(
                         div()
                             .absolute()

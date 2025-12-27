@@ -1,5 +1,6 @@
 use super::{DisplayList, DisplayItem, Color};
 use crate::css::style::StyledNode;
+use crate::css::{Value, Unit};
 use crate::html::entities;
 use std::collections::HashMap;
 
@@ -213,9 +214,28 @@ impl LayoutEngine {
         }
         
         let mut display_list = DisplayList::new();
+        // Start layout at top of viewport (y=0)
         let height = self.layout_node(styled_node, 0.0, 0.0, &mut display_list);
         log::info!(target: "layout", "Layout complete, created {} display items, root height: {}", 
             display_list.items().len(), height);
+        
+        // Log first 10 items' positions to debug
+        for (idx, item) in display_list.items().iter().take(10).enumerate() {
+            match item {
+                super::DisplayItem::Text { x, y, .. } => {
+                    log::info!(target: "layout", "Item #{}: Text at ({}, {})", idx, x, y);
+                }
+                super::DisplayItem::Rectangle { x, y, width, height, .. } => {
+                    log::info!(target: "layout", "Item #{}: Rectangle at ({}, {}), size {}x{}", idx, x, y, width, height);
+                }
+                super::DisplayItem::Image { x, y, width, height, .. } => {
+                    log::info!(target: "layout", "Item #{}: Image at ({}, {}), size {}x{}", idx, x, y, width, height);
+                }
+                super::DisplayItem::Button { x, y, width, height, .. } => {
+                    log::info!(target: "layout", "Item #{}: Button at ({}, {}), size {}x{}", idx, x, y, width, height);
+                }
+            }
+        }
         
         // Log breakdown of items and sample x positions
         let (text, rect, img, btn) = display_list.items().iter().fold((0, 0, 0, 0), |(t, r, i, b), item| {
@@ -380,45 +400,176 @@ impl LayoutEngine {
     }
 
     pub fn compute_style(&self, node: &StyledNode) -> ComputedStyle {
-        // Determine display type based on element
-        let display = if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
+        // Start with defaults based on element type
+        let mut display = if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
             let tag_lower = tag_name.to_lowercase();
             match tag_lower.as_str() {
                 "div" | "section" | "article" | "header" | "footer" | "main" | "body" | "html" | 
                 "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | 
                 "blockquote" | "nav" | "aside" | "form" | "table" | "tr" | "td" | "th" => Display::Block,
                 "span" | "a" | "strong" | "em" | "b" | "i" | "u" | "code" | "small" | "sub" | "sup" => Display::Inline,
-                "img" | "button" | "input" => Display::Inline, // These are handled specially but default to inline
+                "img" | "button" | "input" => Display::Inline,
                 _ => Display::Block,
             }
         } else {
             Display::Block
         };
         
+        let mut position = Position::Static;
+        let mut width = Dimension::Auto;
+        let mut height = Dimension::Auto;
+        let mut margin = Edges { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
+        let mut padding = Edges { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
+        let mut font_family = vec!["sans-serif".to_string()];
+        let mut font_size = 16.0;
+        let mut font_weight = FontWeight::Normal;
+        let mut line_height = LineHeight::Normal;
+        let mut color = Color { r: 0, g: 0, b: 0, a: 255 };
+        let mut text_align = TextAlign::Left;
+        let mut vertical_align = VerticalAlign::Baseline;
+        
+        // Apply CSS declarations from stylesheet
+        for decl in &node.styles {
+            match decl.property.to_lowercase().as_str() {
+                "display" => {
+                    if let Value::Keyword(kw) = &decl.value {
+                        match kw.to_lowercase().as_str() {
+                            "none" => display = Display::None,
+                            "block" => display = Display::Block,
+                            "inline" => display = Display::Inline,
+                            _ => {}
+                        }
+                    }
+                }
+                "color" => {
+                    if let Value::Color(c) = &decl.value {
+                        color = Color { r: c.r, g: c.g, b: c.b, a: c.a };
+                    } else if let Value::Keyword(kw) = &decl.value {
+                        if let Some(c) = crate::css::Color::from_named(kw) {
+                            color = Color { r: c.r, g: c.g, b: c.b, a: c.a };
+                        }
+                    }
+                }
+                "font-size" => {
+                    if let Value::Length(val, unit) = &decl.value {
+                        match unit {
+                            Unit::Px => font_size = *val,
+                            Unit::Em => font_size = *val * 16.0,
+                            Unit::Rem => font_size = *val * 16.0,
+                            Unit::Percent => font_size = *val * 16.0 / 100.0,
+                            _ => font_size = *val,
+                        }
+                    }
+                }
+                "font-family" => {
+                    if let Value::Multiple(values) = &decl.value {
+                        font_family = values.iter().filter_map(|v| {
+                            if let Value::Keyword(kw) = v {
+                                Some(kw.clone())
+                            } else if let Value::String(s) = v {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        }).collect();
+                    } else if let Value::Keyword(kw) = &decl.value {
+                        font_family = vec![kw.clone()];
+                    }
+                }
+                "font-weight" => {
+                    if let Value::Keyword(kw) = &decl.value {
+                        match kw.to_lowercase().as_str() {
+                            "bold" | "bolder" => font_weight = FontWeight::Bold,
+                            "normal" => font_weight = FontWeight::Normal,
+                            "lighter" => font_weight = FontWeight::Lighter,
+                            _ => {
+                                if let Ok(num) = kw.parse::<u16>() {
+                                    font_weight = FontWeight::Number(num);
+                                }
+                            }
+                        }
+                    }
+                }
+                "line-height" => {
+                    if let Value::Length(val, _) = &decl.value {
+                        line_height = LineHeight::Length(*val);
+                    } else if let Value::Keyword(kw) = &decl.value {
+                        if kw.to_lowercase() == "normal" {
+                            line_height = LineHeight::Normal;
+                        }
+                    }
+                }
+                "text-align" => {
+                    if let Value::Keyword(kw) = &decl.value {
+                        match kw.to_lowercase().as_str() {
+                            "left" => text_align = TextAlign::Left,
+                            "right" => text_align = TextAlign::Right,
+                            "center" => text_align = TextAlign::Center,
+                            "justify" => text_align = TextAlign::Justify,
+                            _ => {}
+                        }
+                    }
+                }
+                "margin" | "margin-top" | "margin-right" | "margin-bottom" | "margin-left" => {
+                    if let Value::Length(val, unit) = &decl.value {
+                        let px_val = match unit {
+                            Unit::Px => *val,
+                            _ => *val,
+                        };
+                        match decl.property.to_lowercase().as_str() {
+                            "margin-top" => margin.top = px_val,
+                            "margin-right" => margin.right = px_val,
+                            "margin-bottom" => margin.bottom = px_val,
+                            "margin-left" => margin.left = px_val,
+                            "margin" => {
+                                margin.top = px_val;
+                                margin.right = px_val;
+                                margin.bottom = px_val;
+                                margin.left = px_val;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                "padding" | "padding-top" | "padding-right" | "padding-bottom" | "padding-left" => {
+                    if let Value::Length(val, unit) = &decl.value {
+                        let px_val = match unit {
+                            Unit::Px => *val,
+                            _ => *val,
+                        };
+                        match decl.property.to_lowercase().as_str() {
+                            "padding-top" => padding.top = px_val,
+                            "padding-right" => padding.right = px_val,
+                            "padding-bottom" => padding.bottom = px_val,
+                            "padding-left" => padding.left = px_val,
+                            "padding" => {
+                                padding.top = px_val;
+                                padding.right = px_val;
+                                padding.bottom = px_val;
+                                padding.left = px_val;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        
         ComputedStyle {
             display,
-            position: Position::Static,
-            width: Dimension::Auto,
-            height: Dimension::Auto,
-            margin: Box::new(Edges {
-                top: 0.0,
-                right: 0.0,
-                bottom: 0.0,
-                left: 0.0,
-            }),
-            padding: Box::new(Edges {
-                top: 0.0,
-                right: 0.0,
-                bottom: 0.0,
-                left: 0.0,
-            }),
-            font_family: vec!["sans-serif".to_string()],
-            font_size: 16.0,
-            font_weight: FontWeight::Normal,
-            line_height: LineHeight::Normal,
-            color: Color { r: 0, g: 0, b: 0, a: 255 },
-            text_align: TextAlign::Left,
-            vertical_align: VerticalAlign::Baseline,
+            position,
+            width,
+            height,
+            margin: Box::new(margin),
+            padding: Box::new(padding),
+            font_family,
+            font_size,
+            font_weight,
+            line_height,
+            color,
+            text_align,
+            vertical_align,
         }
     }
 
@@ -437,17 +588,23 @@ impl LayoutEngine {
         let block_start_y = current_y;
         
         // Skip non-content elements, but still process their children
+        // CRITICAL: For skipped elements like #document, head, html, body, etc., we should NOT accumulate Y
+        // because they don't take up visual space. Their children should start at the same Y position.
         if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
             let tag_lower = tag_name.to_lowercase();
-            if matches!(tag_lower.as_str(), "script" | "style" | "meta" | "link" | "head" | "title" | "#document") {
-                // For skipped elements, still process children but don't create rectangles
+            if matches!(tag_lower.as_str(), "script" | "style" | "meta" | "link" | "head" | "title" | "#document" | "html" | "body") {
+                // For skipped elements, process children at the SAME Y position (don't accumulate)
+                // This prevents invisible elements from pushing content down
+                // For html/body, we want their children to start at y=0 (or the passed y)
                 let mut max_child_height: f32 = 0.0;
                 for child in node.node.children() {
                     let styled_child = crate::css::style::StyledNode::new(child.clone());
+                    // Use the same current_y for all children of skipped elements
+                    // For html/body, this ensures content starts at the top
                     let child_height: f32 = self.layout_node(&styled_child, x, current_y, display_list);
                     if child_height > 0.0 {
                         max_child_height = max_child_height.max(child_height);
-                        current_y += child_height + margin;
+                        // Don't accumulate Y for skipped elements - their children should start at the same Y
                     }
                 }
                 return max_child_height;
@@ -496,16 +653,20 @@ impl LayoutEngine {
             crate::dom::NodeType::Text(text) => {
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    // Heuristic: skip text that looks like JavaScript code
-                    // This catches script content that might have slipped through
+                    // Heuristic: skip text that looks like JavaScript or CSS code
+                    // This catches script/style content that might have slipped through
                     let looks_like_js = trimmed.contains("function") || 
                                        trimmed.contains("var ") || 
                                        trimmed.contains("const ") ||
                                        trimmed.contains("let ") ||
-                                       trimmed.contains("=>") ||
-                                       (trimmed.contains("{") && trimmed.contains("}") && trimmed.len() > 50);
+                                       trimmed.contains("=>");
+                    let looks_like_css = (trimmed.contains("{") && trimmed.contains("}")) ||
+                                       (trimmed.contains(":") && (trimmed.contains("px") || trimmed.contains("em") || trimmed.contains("rgb") || trimmed.contains("#"))) ||
+                                       trimmed.starts_with("@") ||
+                                       (trimmed.contains(";") && trimmed.contains(":") && trimmed.len() > 20);
+                    let looks_like_code = looks_like_js || looks_like_css || (trimmed.contains("{") && trimmed.contains("}") && trimmed.len() > 50);
                     
-                    if !looks_like_js {
+                    if !looks_like_code {
                         let decoded = entities::decode_html_entities(trimmed);
                         if !decoded.trim().is_empty() {
                             // Calculate proper x position: if x < padding, use padding, else use x
@@ -524,7 +685,7 @@ impl LayoutEngine {
                             current_y += line_height;
                         }
                     } else {
-                        log::debug!(target: "layout", "Skipping text that looks like JavaScript code");
+                        log::debug!(target: "layout", "Skipping text that looks like code (JS/CSS)");
                     }
                 }
             }
@@ -628,13 +789,18 @@ impl LayoutEngine {
             crate::dom::NodeType::Text(text) => {
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    // Skip JavaScript-like text
+                    // Skip JavaScript/CSS-like text
                     let looks_like_js = trimmed.contains("function") || 
                                        trimmed.contains("var ") || 
                                        trimmed.contains("const ") ||
                                        trimmed.contains("let ") ||
                                        trimmed.contains("=>");
-                    if !looks_like_js {
+                    let looks_like_css = (trimmed.contains("{") && trimmed.contains("}")) ||
+                                       trimmed.contains(":") && (trimmed.contains("px") || trimmed.contains("em") || trimmed.contains("rgb") || trimmed.contains("#")) ||
+                                       trimmed.starts_with("@") ||
+                                       (trimmed.contains(";") && trimmed.contains(":") && trimmed.len() > 20);
+                    let looks_like_code = looks_like_js || looks_like_css || (trimmed.contains("{") && trimmed.contains("}") && trimmed.len() > 50);
+                    if !looks_like_code {
                         let decoded = entities::decode_html_entities(trimmed);
                         if !decoded.trim().is_empty() {
                             display_list.add_item(DisplayItem::Text {

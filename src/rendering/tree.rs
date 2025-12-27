@@ -69,12 +69,28 @@ impl RenderTree {
         // Calculate available width (same as layout_block)
         let available_width = viewport_width - block_x - right_padding;
 
+        // Check if this is a skipped element (html, body, head, etc.) - don't accumulate Y for skipped elements
+        let is_skipped = if let crate::dom::NodeType::Element { tag_name, .. } = styled_node.node.node_type() {
+            let tag_lower = tag_name.to_lowercase();
+            matches!(tag_lower.as_str(), "script" | "style" | "meta" | "link" | "head" | "title" | "#document" | "html" | "body")
+        } else {
+            false
+        };
+
         for child in styled_node.node.children() {
             let styled_child = crate::css::style::StyledNode::new(child.clone());
             let mut child_render_node = RenderNode::new(styled_child.clone());
 
+            // For skipped elements, use the same current_y for all children (don't accumulate)
+            // For normal elements, accumulate Y positions
+            let child_y = if is_skipped {
+                current_y  // Same Y for all children of skipped elements
+            } else {
+                current_y  // Will accumulate below
+            };
+
             // Recursively build child - pass block_x as the new x position
-            Self::build_render_node_recursive(&mut child_render_node, &styled_child, block_x, current_y, layout_engine);
+            Self::build_render_node_recursive(&mut child_render_node, &styled_child, block_x, child_y, layout_engine);
 
             // Get child bounds after recursive build
             let child_bounds = child_render_node.bounds().clone();
@@ -86,8 +102,15 @@ impl RenderTree {
 
             // Child bounds are already set correctly by recursive call, don't override
             max_width = max_width.max(child_bounds.width);
-            max_height += child_height + margin;
-            current_y += child_height + margin;
+            
+            // Only accumulate Y and height for non-skipped elements
+            if !is_skipped {
+                max_height += child_height + margin;
+                current_y += child_height + margin;
+            } else {
+                // For skipped elements, just track max height but don't accumulate Y
+                max_height = max_height.max(child_height);
+            }
 
             render_node.add_child(child_render_node);
         }

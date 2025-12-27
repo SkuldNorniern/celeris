@@ -1,7 +1,7 @@
 use crate::rendering::{DisplayList, DisplayItem, Color};
 use gpui::{div, prelude::*, Entity, IntoElement, Context, px};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use super::skia::SkiaImage;
 
 pub struct ContentView {
     loaded: bool,
@@ -206,315 +206,222 @@ impl gpui::Render for ContentView {
             let items = display_list.items();
             log::debug!(target: "content_view", "Rendering display list with {} items", items.len());
             if !items.is_empty() {
-                // Create container that adapts to viewport size
-                let mut container = div()
+                // Calculate maximum y coordinate to determine content height for scrolling
+                let max_y = items.iter().fold(0.0f32, |max, item| {
+                    let item_max = match item {
+                        DisplayItem::Text { y, .. } => *y + 20.0, // Approximate text height
+                        DisplayItem::Rectangle { y, height, .. } => *y + *height,
+                        DisplayItem::Image { y, height, .. } => *y + *height,
+                        DisplayItem::Button { y, height, .. } => *y + *height,
+                    };
+                    max.max(item_max)
+                });
+                let content_height = (max_y * scale).max(800.0); // At least viewport height
+                
+                log::debug!(target: "content_view", "Content height: {} (max_y: {}, scale: {})", content_height, max_y, scale);
+                
+                // Following GPUI scrollable example pattern:
+                // Outer container with size_full (scrolling handled by parent)
+                // Inner container with full content height
+                // Create inner container with full content height
+                // Use min_h to ensure container is at least content_height tall
+                // Create container - we'll build it by chaining all children at once
+                // GPUI's .child() should accumulate children, but let's verify by building the chain
+                let mut container_builder = div()
                     .w_full()
-                    .h_full()
+                    .min_h(px(content_height))
+                    .h(px(content_height))
                     .relative()
                     .bg(gpui::rgb(0xffffff));
                 
-                // Render rectangles first (background) - but skip white rectangles to avoid visual clutter
-                for item in items {
-                    if let DisplayItem::Rectangle { x, y, width, height, color } = item {
-                        if *width > 0.0 && *height > 0.0 {
-                            let rgb = Self::color_to_rgb(color);
-                            if rgb != 0xffffff {
-                            container = container.child(
+                // Use fold to accumulate all children - track container and counts in a tuple
+                // Add test elements at visible position to verify rendering
+                let (container, rect_count, button_count, text_count, image_count) = items.iter().fold(
+                    (
+                        container_builder
+                            .child(
                                 div()
                                     .absolute()
-                                        .left(px(*x * scale))
-                                        .top(px(*y * scale))
-                                        .w(px(*width * scale))
-                                        .h(px(*height * scale))
-                                        .bg(gpui::rgb(rgb))
-                                    .border(px(0.5))
-                                    .border_color(gpui::rgb(0xe0e0e0))
-                            );
-                            }
-                        }
-                    }
-                }
-                
-                // Render images (as placeholder boxes with alt text)
-                let mut image_count = 0;
-                for item in items {
-                    if let DisplayItem::Image { url, x, y, width, height, alt } = item {
-                        image_count += 1;
-                        log::info!(target: "content_view", "Rendering image #{}: '{}' at x={}, y={}, size {}x{}", 
-                            image_count, alt, x, y, width, height);
-                        
-                        // Render actual image using GPUI's img() function
-                        // Resolve relative URLs to absolute URLs
-                        let image_url = if url.is_empty() {
-                            // Fallback: skip if no URL
-                            continue;
-                        } else {
-                            self.resolve_url(url.as_str())
-                        };
-                        
-                        log::debug!(target: "content_view", "Resolved image URL: '{}' -> '{}'", url, image_url);
-                        
-                        let scaled_width = (*width * scale).max(1.0);
-                        let scaled_height = (*height * scale).max(1.0);
-                        let alt_text = alt.clone();
-                        
-                        // Check if we have cached image data and render using GPUI img()
-                        log::info!(target: "content_view", "Checking cache for image URL: '{}'", image_url);
-                        log::info!(target: "content_view", "Cache has {} images. All keys: {:?}", 
-                            self.image_cache.len(),
-                            self.image_cache.keys().collect::<Vec<_>>());
-                        
-                        // Try to find image in cache - check exact match first, then try all cache keys
-                        // This handles URL resolution mismatches between fetching and lookup
-                        let cached_data = self.get_image_data(&image_url)
-                            .or_else(|| {
-                                // Try with trailing slash removed
-                                let url_no_slash = image_url.trim_end_matches('/');
-                                if url_no_slash != image_url {
-                                    self.get_image_data(url_no_slash)
-                                } else {
-                                    None
-                                }
-                            })
-                            .or_else(|| {
-                                // Try with trailing slash added
-                                if !image_url.ends_with('/') {
-                                    self.get_image_data(&format!("{}/", image_url))
-                                } else {
-                                    None
-                                }
-                            })
-                            .or_else(|| {
-                                // Last resort: try to find any cache entry that ends with the same path
-                                // This handles cases where the domain might differ but path is the same
-                                let url_path = if let Some(path_start) = image_url.rfind('/') {
-                                    &image_url[path_start..]
-                                } else {
-                                    &image_url
-                                };
-                                
-                                self.image_cache.iter()
-                                    .find(|(key, _)| key.ends_with(url_path))
-                                    .map(|(_, data)| data)
-                            });
-                        
-                        if let Some(image_data) = cached_data {
-                            log::info!(target: "content_view", "Found cached image data for '{}' ({} bytes)", image_url, image_data.len());
-                            // Decode image using image crate
-                            // Note: image crate is available when gui feature is enabled
-                            {
-                                // image 0.7 API - use open() directly
-                                log::info!(target: "content_view", "Attempting to decode image data ({} bytes)", image_data.len());
-                                // image 0.7 API - use load_from_memory
-                                let decode_result = image::load_from_memory(image_data)
-                                    .map_err(|e| {
-                                        log::error!(target: "content_view", "Failed to decode image: {}", e);
-                                        format!("Failed to decode image: {}", e)
-                                    });
-                                
-                                match decode_result {
-                                    Ok(decoded_image) => {
-                                        // Convert to rgba8 buffer for consistent handling (image 0.7 API)
-                                        // DynamicImage needs to be converted - use as_rgba8() or match on variants
-                                        let rgba_img = match decoded_image {
-                                            image::DynamicImage::ImageRgba8(img) => img,
-                                            _ => decoded_image.to_rgba(),
-                                        };
-                                        let img_width = rgba_img.width();
-                                        let img_height = rgba_img.height();
-                                        log::info!(target: "content_view", "Successfully decoded image: {}x{}", 
-                                            img_width, img_height);
-                                        // Save image to temporary file and use GPUI's ImageSource
-                                        use std::fs;
-                                        
-                                        // Create temp directory if it doesn't exist
-                                        let temp_dir = std::env::temp_dir().join("celeris_images");
-                                        if let Err(e) = fs::create_dir_all(&temp_dir) {
-                                            log::warn!(target: "content_view", "Failed to create temp dir: {}", e);
-                                        }
-                                        
-                                        // Generate unique filename from URL hash
-                                        use std::collections::hash_map::DefaultHasher;
-                                        use std::hash::{Hash, Hasher};
-                                        let mut hasher = DefaultHasher::new();
-                                        image_url.hash(&mut hasher);
-                                        let hash = hasher.finish();
-                                        let temp_file = temp_dir.join(format!("img_{:x}.png", hash));
-                                        
-                                        // Save image as PNG to file (image 0.7 API)
-                                        match rgba_img.save(&temp_file) {
-                                            Ok(_) => {
-                                                // Get file size for logging
-                                                if let Ok(metadata) = fs::metadata(&temp_file) {
-                                                    let file_size = metadata.len();
-                                                    log::info!(target: "content_view", "Saved image to temp file: {:?} ({} bytes)", temp_file, file_size);
-                                                } else {
-                                                    log::info!(target: "content_view", "Saved image to temp file: {:?}", temp_file);
-                                                }
-                                                
-                                                // Use GPUI's img() with file path string
-                                                let file_path_str = temp_file.to_string_lossy().to_string();
-                                                
-                                                log::info!(target: "content_view", "Rendering image using GPUI img() at x={}, y={}, size {}x{}", 
-                                                    *x * scale, *y * scale, scaled_width, scaled_height);
-                                                
-                                                container = container.child(
-                                                    div()
-                                                        .absolute()
-                                                        .left(px(*x * scale))
-                                                        .top(px(*y * scale))
-                                                        .w(px(scaled_width))
-                                                        .h(px(scaled_height))
-                                                        .child(
-                                                            gpui::img(file_path_str)
-                                                                .w(px(scaled_width))
-                                                                .h(px(scaled_height))
-                                                                .object_fit(gpui::ObjectFit::Contain)
-                                                        )
-                                                );
-                                            }
-                                            Err(e) => {
-                                                log::warn!(target: "content_view", "Failed to save image to temp file: {}", e);
-                                                // Fallback to placeholder
-                                                let placeholder_text = format!("File Error\n{}", alt_text);
-                                                container = container.child(
-                                                    div()
-                                                        .absolute()
-                                                        .left(px(*x * scale))
-                                                        .top(px(*y * scale))
-                                                        .w(px(scaled_width))
-                                                        .h(px(scaled_height))
-                                                        .bg(gpui::rgb(0xf0f0f0))
-                                                        .border(px(1.0))
-                                                        .border_color(gpui::rgb(0xcccccc))
-                                                        .flex()
-                                                        .flex_col()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .text_color(gpui::rgb(0x666666))
-                                                        .text_xs()
-                                                        .p_2()
-                                                        .child(placeholder_text)
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        log::warn!(target: "content_view", "Failed to decode image: {}", e);
-                                        // Fallback to placeholder
-                                        let placeholder_text = format!("Decode Error\n{}", alt_text);
-                                        container = container.child(
+                                    .left(px(10.0))
+                                    .top(px(10.0))
+                                    .w(px(200.0))
+                                    .h(px(50.0))
+                                    .bg(gpui::rgb(0xff0000))
+                                    .text_color(gpui::rgb(0xffffff))
+                                    .child("TEST ELEMENT")
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left(px(220.0))
+                                    .top(px(10.0))
+                                    .w(px(120.0))
+                                    .h(px(32.0))
+                                    .bg(gpui::rgb(0x00ff00))
+                                    .border(px(2.0))
+                                    .border_color(gpui::rgb(0x0000ff))
+                                    .text_color(gpui::rgb(0x000000))
+                                    .text_sm()
+                                    .child("TEST BUTTON")
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left(px(350.0))
+                                    .top(px(10.0))
+                                    .w(px(272.0))
+                                    .h(px(92.0))
+                                    .bg(gpui::rgb(0xff8888))
+                                    .border(px(2.0))
+                                    .border_color(gpui::rgb(0xff0000))
+                                    .text_color(gpui::rgb(0x000000))
+                                    .text_xs()
+                                    .child("TEST IMAGE")
+                            ),
+                        0, 0, 0, 0
+                    ),
+                    |(acc, rc, bc, tc, ic), item| {
+                        match item {
+                            DisplayItem::Rectangle { x, y, width, height, color } => {
+                                if *width > 0.0 && *height > 0.0 {
+                                    let rgb = Self::color_to_rgb(color);
+                                    if rgb != 0xffffff {
+                                        (acc.child(
                                             div()
                                                 .absolute()
                                                 .left(px(*x * scale))
                                                 .top(px(*y * scale))
-                                                .w(px(scaled_width))
-                                                .h(px(scaled_height))
-                                                .bg(gpui::rgb(0xf0f0f0))
-                                                .border(px(1.0))
-                                                .border_color(gpui::rgb(0xcccccc))
-                                                .flex()
-                                                .flex_col()
-                                                .items_center()
-                                                .justify_center()
-                                                .text_color(gpui::rgb(0x666666))
-                                                .text_xs()
-                                                .p_2()
-                                                .child(placeholder_text)
-                                        );
+                                                .w(px((*width * scale).max(1.0)))
+                                                .h(px((*height * scale).max(1.0)))
+                                                .bg(gpui::rgb(rgb))
+                                                .border(px(0.5))
+                                                .border_color(gpui::rgb(0xe0e0e0))
+                                        ), rc + 1, bc, tc, ic)
+                                    } else {
+                                        (acc, rc, bc, tc, ic)
                                     }
+                                } else {
+                                    (acc, rc, bc, tc, ic)
                                 }
                             }
-                            // Note: image crate is always available when gui feature is enabled
-                            // No fallback needed - if decoding fails, error handling above will show placeholder
-                        } else {
-                            // No cached image data - show loading placeholder
-                            let placeholder_text: String = if alt_text.is_empty() { 
-                                if image_url.len() > 40 {
-                                    format!("Loading...\n{}...", &image_url[..40])
-                                } else {
-                                    format!("Loading...\n{}", image_url)
+                            DisplayItem::Button { text, x, y, width, height } => {
+                                let new_bc = bc + 1;
+                                if new_bc <= 3 {
+                                    log::info!(target: "content_view", "Rendering button #{}: '{}' at x={}, y={}, size {}x{}", 
+                                        new_bc, text, x, y, width, height);
                                 }
-                            } else { 
-                                format!("Loading...\n{}", alt_text)
-                            };
-                            
-                            container = container.child(
-                                div()
-                                    .absolute()
-                                    .left(px(*x * scale))
-                                    .top(px(*y * scale))
-                                    .w(px(scaled_width))
-                                    .h(px(scaled_height))
-                                    .bg(gpui::rgb(0xf0f0f0))
-                                    .border(px(1.0))
-                                    .border_color(gpui::rgb(0xcccccc))
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_color(gpui::rgb(0x666666))
-                                    .text_xs()
-                                    .p_2()
-                                    .child(
+                                let btn_w = (*width * scale).max(1.0);
+                                let btn_h = (*height * scale).max(1.0);
+                                (acc.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(*x * scale))
+                                        .top(px(*y * scale))
+                                        .w(px(btn_w))
+                                        .h(px(btn_h))
+                                        .bg(gpui::rgb(0x00ff00))
+                                        .border(px(2.0))
+                                        .border_color(gpui::rgb(0x0000ff))
+                                        .text_color(gpui::rgb(0x000000))
+                                        .text_sm()
+                                        .cursor_pointer()
+                                        .hover(|style: gpui::StyleRefinement| {
+                                            style.bg(gpui::rgb(0x00cc00))
+                                        })
+                                        .child(text.clone())
+                                ), rc, new_bc, tc, ic)
+                            }
+                            DisplayItem::Text { content, x, y, color } => {
+                                let trimmed = content.trim();
+                                let looks_like_js = trimmed.contains("function") || 
+                                                   trimmed.contains("var ") || 
+                                                   trimmed.contains("const ") ||
+                                                   trimmed.contains("let ") ||
+                                                   trimmed.contains("=>");
+                                let looks_like_css = (trimmed.contains("{") && trimmed.contains("}")) ||
+                                                   (trimmed.contains(":") && (trimmed.contains("px") || trimmed.contains("em") || trimmed.contains("rgb") || trimmed.contains("#"))) ||
+                                                   trimmed.starts_with("@") ||
+                                                   (trimmed.contains(";") && trimmed.contains(":") && trimmed.len() > 20);
+                                let looks_like_code = looks_like_js || looks_like_css || (trimmed.contains("{") && trimmed.contains("}") && trimmed.len() > 50);
+                                
+                                if !looks_like_code {
+                                    (acc.child(
                                         div()
-                                            .text_center()
-                                            .child(placeholder_text)
-                                    )
-                            );
+                                            .absolute()
+                                            .left(px(*x * scale))
+                                            .top(px(*y * scale))
+                                            .text_color(gpui::rgb(Self::color_to_rgb(color)))
+                                            .child(content.clone())
+                                    ), rc, bc, tc + 1, ic)
+                                } else {
+                                    (acc, rc, bc, tc, ic)
+                                }
+                            }
+                            DisplayItem::Image { url, x, y, width, height, alt } => {
+                                let new_ic = ic + 1;
+                                log::info!(target: "content_view", "Rendering image #{}: '{}' at x={}, y={}, size {}x{}", 
+                                    new_ic, alt, x, y, width, height);
+                                let image_url = if url.is_empty() {
+                                    return (acc, rc, bc, tc, ic);
+                                } else {
+                                    self.resolve_url(url.as_str())
+                                };
+                                
+                                let scaled_width = (*width * scale).max(1.0);
+                                let scaled_height = (*height * scale).max(1.0);
+                                let alt_text = alt.clone();
+                                
+                                // Try to get cached image data
+                                if let Some(_image_data) = self.get_image_data(&image_url) {
+                                    (acc.child(
+                                        div()
+                                            .absolute()
+                                            .left(px(*x * scale))
+                                            .top(px(*y * scale))
+                                            .w(px(scaled_width))
+                                            .h(px(scaled_height))
+                                            .bg(gpui::rgb(0xff8888))
+                                            .border(px(2.0))
+                                            .border_color(gpui::rgb(0xff0000))
+                                            .text_color(gpui::rgb(0x000000))
+                                            .text_xs()
+                                            .child(format!("Image\n{}", alt_text))
+                                    ), rc, bc, tc, new_ic)
+                                } else {
+                                    (acc.child(
+                                        div()
+                                            .absolute()
+                                            .left(px(*x * scale))
+                                            .top(px(*y * scale))
+                                            .w(px(scaled_width))
+                                            .h(px(scaled_height))
+                                            .bg(gpui::rgb(0xffff88))
+                                            .border(px(2.0))
+                                            .border_color(gpui::rgb(0xff8800))
+                                            .text_color(gpui::rgb(0x000000))
+                                            .text_xs()
+                                            .child(format!("Loading...\n{}", alt_text))
+                                    ), rc, bc, tc, new_ic)
+                                }
+                            }
                         }
                     }
+                );
+                
+                log::info!(target: "content_view", "Built container: {} rects, {} buttons, {} text, {} images (total: {})", 
+                    rect_count, button_count, text_count, image_count, 
+                    rect_count + button_count + text_count + image_count);
+                
+                // Debug: Log if we're actually adding elements
+                if rect_count == 0 && button_count == 0 && text_count == 0 && image_count == 0 {
+                    log::warn!(target: "content_view", "WARNING: No elements were added to container! Only test element will be visible.");
+                } else {
+                    log::info!(target: "content_view", "Added {} elements to container (test element + {} content elements)", 
+                        1 + rect_count + button_count + text_count + image_count,
+                        rect_count + button_count + text_count + image_count);
                 }
                 
-                // Render buttons
-                let mut button_count = 0;
-                for item in items {
-                    if let DisplayItem::Button { text, x, y, width, height } = item {
-                        button_count += 1;
-                        log::info!(target: "content_view", "Rendering button #{}: '{}' at x={}, y={}, size {}x{}", 
-                            button_count, text, x, y, width, height);
-                        
-                        // Scale button position and size
-                        container = container.child(
-                            div()
-                                .absolute()
-                                .left(px(*x * scale))
-                                .top(px(*y * scale))
-                                .w(px(*width * scale))
-                                .h(px(*height * scale))
-                                .bg(gpui::rgb(0x00ff00)) // Bright green
-                                .border(px(3.0 * scale))
-                                .border_color(gpui::rgb(0x0000ff)) // Blue border
-                                .text_color(gpui::rgb(0x000000))
-                                .text_sm()
-                                .p_2()
-                                .cursor_pointer()
-                                .hover(|style| {
-                                    style.bg(gpui::rgb(0x00cc00))
-                                })
-                                .child(text.clone())
-                        );
-                    }
-                }
-                
-                // Then render text on top (scaled)
-                let mut text_count = 0;
-                for item in items {
-                    if let DisplayItem::Text { content, x, y, color } = item {
-                        text_count += 1;
-                        container = container.child(
-                            div()
-                                .absolute()
-                                .left(px(*x * scale))
-                                .top(px(*y * scale))
-                                .text_color(gpui::rgb(Self::color_to_rgb(color)))
-                                .child(content.clone())
-                        );
-                    }
-                }
-                log::info!(target: "content_view", "Rendered {} children: {} images, {} buttons, {} text", 
-                    image_count + button_count + text_count, image_count, button_count, text_count);
-                
+                // Return the container - all elements are already added
                 return container;
             }
         }
