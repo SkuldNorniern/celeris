@@ -672,11 +672,19 @@ impl CssParser {
             .consume_while(|c| c.is_ascii_digit() || c == '.')
             .parse()
             .ok()?;
-        let unit = match &self.parse_identifier().to_lowercase()[..] {
+        
+        // Check for percentage first (it's a single character, not an identifier)
+        if self.peek_char() == '%' {
+            self.next_char();
+            return Some(Value::Length(num, Unit::Percent));
+        }
+        
+        // Otherwise, parse as identifier for other units
+        let unit_str = self.parse_identifier().to_lowercase();
+        let unit = match unit_str.as_str() {
             "px" => Unit::Px,
             "em" => Unit::Em,
             "rem" => Unit::Rem,
-            "%" => Unit::Percent,
             _ => return None,
         };
         Some(Value::Length(num, unit))
@@ -685,15 +693,22 @@ impl CssParser {
     fn parse_color(&mut self) -> Option<Value> {
         self.next_char(); // consume '#'
         let hex = self.consume_while(|c| c.is_ascii_hexdigit());
-        if hex.len() != 6 {
-            return None;
+        
+        // Support both 3-digit (#fff) and 6-digit (#ffffff) hex colors
+        if hex.len() == 3 {
+            // Expand 3-digit to 6-digit: #fff -> #ffffff
+            let r = u8::from_str_radix(&format!("{}{}", &hex[0..1], &hex[0..1]), 16).ok()?;
+            let g = u8::from_str_radix(&format!("{}{}", &hex[1..2], &hex[1..2]), 16).ok()?;
+            let b = u8::from_str_radix(&format!("{}{}", &hex[2..3], &hex[2..3]), 16).ok()?;
+            Some(Value::Color(Color { r, g, b, a: 255 }))
+        } else if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            Some(Value::Color(Color { r, g, b, a: 255 }))
+        } else {
+            None
         }
-
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-
-        Some(Value::Color(Color { r, g, b, a: 255 }))
     }
 
     fn parse_function(&mut self) -> Option<Value> {
