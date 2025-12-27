@@ -43,11 +43,16 @@ impl RenderTree {
     ) {
         // Calculate bounds using layout engine
         let computed = layout_engine.compute_style(styled_node);
-        let mut current_y = y;
-        let left_padding = 20.0;
-        let right_padding = 20.0;
-        let margin = 12.0;
-        let line_height = 24.0;
+        // Real browsers: Start from y + top margin
+        let mut current_y = y + computed.margin.top;
+        let left_padding = if x < 20.0 { 20.0 } else { computed.padding.left };
+        let right_padding = 20.0; // Viewport right padding
+        // Use default line height (can be improved later with font metrics access)
+        let line_height = match computed.line_height {
+            crate::rendering::layout::LineHeight::Normal => 24.0, // Default line height
+            crate::rendering::layout::LineHeight::Number(n) => computed.font_size * n,
+            crate::rendering::layout::LineHeight::Length(h) => h,
+        };
 
         // Get viewport dimensions from layout engine
         let viewport_width = layout_engine.viewport_width() as f32;
@@ -57,13 +62,13 @@ impl RenderTree {
         let mut max_width: f32 = 0.0;
         let mut max_height = 0.0;
 
-        // Determine block_x for this node (same logic as layout_block)
-        let block_x = if x < left_padding * 2.0 {
-            // Root element: start at left padding
-            left_padding
+        // Real browsers: Calculate block_x including margin
+        let block_x = if x < 20.0 {
+            // Root element: start at left padding + left margin
+            left_padding + computed.margin.left
         } else {
-            // Nested element: x already includes padding
-            x
+            // Nested element: x already includes parent padding, add margin
+            x + computed.margin.left
         };
 
         // Calculate available width (same as layout_block)
@@ -77,16 +82,24 @@ impl RenderTree {
             false
         };
 
+        // Log first few elements for debugging
+        if let crate::dom::NodeType::Element { tag_name, .. } = styled_node.node.node_type() {
+            let tag_lower = tag_name.to_lowercase();
+            if tag_lower == "div" || tag_lower == "body" || tag_lower == "html" {
+                log::debug!(target: "tree", "Building <{}> at y={}, is_skipped={}", tag_lower, y, is_skipped);
+            }
+        }
+
         for child in styled_node.node.children() {
             let styled_child = crate::css::style::StyledNode::new(child.clone());
             let mut child_render_node = RenderNode::new(styled_child.clone());
 
             // For skipped elements, use the same current_y for all children (don't accumulate)
-            // For normal elements, accumulate Y positions
+            // For normal elements, use current_y which will be accumulated after
             let child_y = if is_skipped {
                 current_y  // Same Y for all children of skipped elements
             } else {
-                current_y  // Will accumulate below
+                current_y  // Use current accumulated Y
             };
 
             // Recursively build child - pass block_x as the new x position
@@ -94,9 +107,11 @@ impl RenderTree {
 
             // Get child bounds after recursive build
             let child_bounds = child_render_node.bounds().clone();
+            // Use the child's actual height, or a minimum height for layout purposes
             let child_height = if child_bounds.height > 0.0 {
                 child_bounds.height
             } else {
+                // For elements with no explicit height, use line height as minimum
                 line_height
             };
 
@@ -105,30 +120,39 @@ impl RenderTree {
             
             // Only accumulate Y and height for non-skipped elements
             if !is_skipped {
-                max_height += child_height + margin;
-                current_y += child_height + margin;
+                // Real browsers: Add child height + bottom margin for next element
+                let child_computed = layout_engine.compute_style(&styled_child);
+                let child_bottom_margin = child_computed.margin.bottom;
+                let child_total_height = child_height + child_bottom_margin;
+                current_y += child_total_height;
+                max_height += child_total_height;
             } else {
                 // For skipped elements, just track max height but don't accumulate Y
+                // All children of skipped elements start at the same Y position (current_y)
                 max_height = max_height.max(child_height);
             }
 
             render_node.add_child(child_render_node);
         }
 
-        // Set bounds for this node - use full available width for root elements
-        let node_width = if x < left_padding * 2.0 {
-            // Root element: use full available width
-            available_width.max(100.0)
+        // Real browsers: Calculate node width including margins
+        let node_width = if x < 20.0 {
+            // Root element: use full available width minus margins
+            (available_width - computed.margin.left - computed.margin.right).max(100.0f32)
         } else {
             // Nested element: use calculated width
-            max_width.max(available_width.min(100.0))
+            max_width.max(available_width.min(100.0f32))
         };
+
+        // Real browsers: Height includes content + padding + margins
+        let content_height = max_height.max(line_height);
+        let total_height = content_height + computed.padding.top + computed.padding.bottom + computed.margin.bottom;
 
         let bounds = Bounds {
             x: block_x,
-            y,
+            y: current_y - computed.margin.top, // Adjust y to account for top margin
             width: node_width,
-            height: max_height.max(line_height),
+            height: total_height,
         };
         render_node.set_bounds(bounds);
 

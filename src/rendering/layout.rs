@@ -298,26 +298,25 @@ impl LayoutEngine {
                         .and_then(|h| h.parse::<f32>().ok())
                         .unwrap_or(200.0); // Default to 200px instead of 100px
                     
-                    // Calculate proper x position: if x < padding, use padding, else use x
-                    let padding = 20.0;
-                    let img_x = if x < padding {
-                        padding
-                    } else {
-                        x
-                    };
+                    // Real browsers: Apply margins and padding for positioning
+                    let computed = self.compute_style(node);
+                    let left_padding = if x < 20.0 { 20.0 } else { computed.padding.left };
+                    let img_x = x + left_padding + computed.margin.left;
+                    let img_y = y + computed.margin.top;
                     
-                    log::info!(target: "layout", "Found img element: src='{}', alt='{}', size={}x{} at ({}, {}) -> img_x={}", 
-                        img_url, alt_text, img_width, img_height, x, y, img_x);
+                    log::info!(target: "layout", "Found img element: src='{}', alt='{}', size={}x{} at ({}, {}) -> img_x={}, img_y={}", 
+                        img_url, alt_text, img_width, img_height, x, y, img_x, img_y);
                     
                     display_list.add_item(DisplayItem::Image {
                         url: img_url,
                         x: img_x,
-                        y,
+                        y: img_y,
                         width: img_width,
                         height: img_height,
                         alt: alt_text,
                     });
-                    return img_height + 8.0; // Return height with margin for parent to track
+                    // Return total height including margins
+                    return img_height + computed.margin.top + computed.margin.bottom;
                 }
                 "button" | "input" => {
                     let button_text = if tag_name == "button" {
@@ -341,15 +340,13 @@ impl LayoutEngine {
                             .to_string()
                     };
                     
-                    // Calculate proper x position: if x < padding, use padding, else use x
-                    let padding = 20.0;
-                    let button_x = if x < padding {
-                        padding
-                    } else {
-                        x
-                    };
+                    // Real browsers: Apply margins and padding for positioning
+                    let computed = self.compute_style(node);
+                    let left_padding = if x < 20.0 { 20.0 } else { computed.padding.left };
+                    let button_x = x + left_padding + computed.margin.left;
+                    let button_y = y + computed.margin.top;
                     
-                    log::debug!(target: "layout", "Found {} element: text={} at ({}, {}) -> button_x={}", tag_name, button_text, x, y, button_x);
+                    log::debug!(target: "layout", "Found {} element: text={} at ({}, {}) -> button_x={}, button_y={}", tag_name, button_text, x, y, button_x, button_y);
                     
                     let button_width = 120.0;
                     let button_height = 32.0;
@@ -357,11 +354,12 @@ impl LayoutEngine {
                     display_list.add_item(DisplayItem::Button {
                         text: button_text,
                         x: button_x,
-                        y,
+                        y: button_y,
                         width: button_width,
                         height: button_height,
                     });
-                    return button_height; // Return height for parent to track
+                    // Return total height including margins
+                    return button_height + computed.margin.top + computed.margin.bottom;
                 }
                 _ => {}
             }
@@ -574,17 +572,18 @@ impl LayoutEngine {
     }
 
     fn layout_block(&mut self, node: &StyledNode, x: f32, y: f32, style: &ComputedStyle, display_list: &mut DisplayList) -> f32 {
-        let mut current_y = y;
-        // Use viewport-based padding and margins for better layout
-        // Increased padding for better left/right margins
-        let padding = 20.0;
+        // Real browsers: Apply top margin first, then position content
+        // Start from y position, add top margin
+        let mut current_y = y + style.margin.top;
+        // Use computed padding from style (or default viewport padding for root)
+        let left_padding = if x < 20.0 { 20.0 } else { style.padding.left };
+        let right_padding = 20.0; // Viewport right padding
         let font_metrics = self.font_manager.get_metrics(&style.font_family, style.font_size);
         let line_height = match style.line_height {
             LineHeight::Normal => font_metrics.line_height,
             LineHeight::Number(n) => style.font_size * n,
             LineHeight::Length(h) => h,
         };
-        let margin = 12.0;
         let block_start_y = current_y;
         
         // Skip non-content elements, but still process their children
@@ -617,30 +616,48 @@ impl LayoutEngine {
         
         for (idx, child) in node.node.children().iter().enumerate() {
             let styled_child = crate::css::style::StyledNode::new(child.clone());
+            let child_computed = self.compute_style(&styled_child);
+            
+            // Real browsers: Apply top margin before positioning child
+            // Margin collapsing: adjacent margins collapse (use max of two margins)
+            // For simplicity, we'll add the child's top margin to current_y
+            let child_top_margin = child_computed.margin.top;
+            let child_y = current_y + child_top_margin;
+            
             if let crate::dom::NodeType::Element { tag_name, .. } = child.node_type() {
-                log::debug!(target: "layout", "Processing child #{}: <{}> at y={}", idx, tag_name, current_y);
+                log::debug!(target: "layout", "Processing child #{}: <{}> at y={} (margin.top={})", idx, tag_name, child_y, child_top_margin);
             }
-            let child_height: f32 = self.layout_node(&styled_child, x + padding, current_y, display_list);
+            
+            // Calculate child x position: add left padding and margin
+            let child_x = x + left_padding + child_computed.margin.left;
+            
+            let child_height: f32 = self.layout_node(&styled_child, child_x, child_y, display_list);
             
             if child_height > 0.0 {
                 has_children = true;
-                max_child_height = max_child_height.max(child_height);
-                current_y += child_height + margin;
+                // Real browsers: Add child height + bottom margin for next element
+                let child_bottom_margin = child_computed.margin.bottom;
+                let child_total_height = child_height + child_bottom_margin;
+                max_child_height = max_child_height.max(child_total_height);
+                current_y += child_total_height;
             } else {
                 // Fallback for elements that don't return height
-                let child_computed = self.compute_style(&styled_child);
                 match child_computed.display {
                     Display::Block => {
                         has_children = true;
-                        let h: f32 = self.layout_block(&styled_child, x + padding, current_y, &child_computed, display_list);
-                        current_y += h.max(line_height) + margin;
-                        max_child_height = max_child_height.max(h);
+                        let h: f32 = self.layout_block(&styled_child, child_x, child_y, &child_computed, display_list);
+                        let child_bottom_margin = child_computed.margin.bottom;
+                        let child_total_height = h.max(line_height) + child_bottom_margin;
+                        current_y += child_total_height;
+                        max_child_height = max_child_height.max(child_total_height);
                     }
                     Display::Inline => {
                         has_children = true;
-                        let h: f32 = self.layout_inline(&styled_child, x + padding, current_y, &child_computed, display_list);
-                        current_y += h.max(line_height) + margin;
-                        max_child_height = max_child_height.max(h);
+                        let h: f32 = self.layout_inline(&styled_child, child_x, child_y, &child_computed, display_list);
+                        let child_bottom_margin = child_computed.margin.bottom;
+                        let child_total_height = h.max(line_height) + child_bottom_margin;
+                        current_y += child_total_height;
+                        max_child_height = max_child_height.max(child_total_height);
                     }
                     Display::None => {}
                 }
@@ -669,19 +686,15 @@ impl LayoutEngine {
                     if !looks_like_code {
                         let decoded = entities::decode_html_entities(trimmed);
                         if !decoded.trim().is_empty() {
-                            // Calculate proper x position: if x < padding, use padding, else use x
-                            let text_x = if x < padding {
-                                padding
-                            } else {
-                                x
-                            };
+                            // Calculate proper x position: add left padding and margin
+                            let text_x = x + left_padding + style.margin.left;
                             display_list.add_item(DisplayItem::Text {
                                 content: decoded,
                                 x: text_x,
-                                y: current_y, // Use current_y instead of y for proper positioning
+                                y: current_y, // Use current_y for proper positioning
                                 color: style.color.clone(),
                             });
-                            // Update current_y for text
+                            // Update current_y for text (add line height)
                             current_y += line_height;
                         }
                     } else {
@@ -693,38 +706,35 @@ impl LayoutEngine {
                 let tag_lower = tag_name.to_lowercase();
                 // Create rectangles for block-level elements
                 if matches!(tag_lower.as_str(), "div" | "section" | "article" | "header" | "footer" | "main" | "body" | "html" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "nav" | "aside") {
-                    let block_height = if has_children && current_y > block_start_y {
-                        current_y - block_start_y + margin
+                    // Real browsers: Block height = content height + padding + border
+                    // For now, we'll use content height (current_y - block_start_y) + bottom margin
+                    let content_height = if has_children && current_y > block_start_y {
+                        current_y - block_start_y
                     } else {
                         line_height
                     };
-                    // Calculate block width - use full viewport width minus padding on both sides
-                    // The x position already includes left padding for nested elements
-                    // For root elements (x=0), we need to add left padding
-                    // For nested elements, x already includes padding, so we use it as-is
-                    let left_padding = 20.0;
-                    let right_padding = 20.0;
+                    let block_height = content_height + style.padding.top + style.padding.bottom + style.margin.bottom;
                     
-                    // Determine the actual left edge of this block
-                    let block_x = if x < left_padding {
-                        // Root element: start at left padding
-                        left_padding
+                    // Calculate block width - use full viewport width minus padding and margins
+                    // Determine the actual left edge of this block (including margin)
+                    let block_x = if x < 20.0 {
+                        // Root element: start at left padding + left margin
+                        20.0 + style.margin.left
                     } else {
-                        // Nested element: x already includes padding
-                        x
+                        // Nested element: x already includes parent padding, add margin
+                        x + style.margin.left
                     };
                     
                     // Calculate available width from block_x to viewport edge
-                    let available_width = (self.viewport_width as f32) - block_x - right_padding;
+                    let available_width = (self.viewport_width as f32) - block_x - right_padding - style.margin.right;
                     let block_width = available_width.max(50.0);
                     
-                    // Log for debugging - log ALL block elements to see what's happening
-                    log::info!(target: "layout", "Block <{}> x={}, block_x={}, viewport={}, available={}, width={}", 
-                        tag_lower, x, block_x, self.viewport_width, available_width, block_width);
+                    // Log for debugging
+                    log::info!(target: "layout", "Block <{}> x={}, block_x={}, y={}, height={}, width={}, margin.top={}, margin.bottom={}", 
+                        tag_lower, x, block_x, block_start_y, block_height, block_width, style.margin.top, style.margin.bottom);
                     
                     // Only add rectangle if it has meaningful dimensions and is not the root html/body
                     // Use white background for layout structure (will be filtered in rendering)
-                    // Use block_x instead of x for proper positioning
                     if block_width > 0.0 && block_height > 0.0 && !matches!(tag_lower.as_str(), "html" | "body") {
                         display_list.add_item(DisplayItem::Rectangle {
                             x: block_x,
@@ -739,13 +749,15 @@ impl LayoutEngine {
             _ => {}
         }
         
-        // Return the height of this block
-        let block_height = if has_children && current_y > block_start_y {
+        // Real browsers: Return total height including margins and padding
+        // Height = content height + top margin + bottom margin + padding
+        let content_height = if has_children && current_y > block_start_y {
             current_y - block_start_y
         } else {
             line_height
         };
-        block_height
+        let total_height = content_height + style.margin.top + style.margin.bottom + style.padding.top + style.padding.bottom;
+        total_height
     }
 
     fn layout_inline(&mut self, node: &StyledNode, x: f32, y: f32, style: &ComputedStyle, display_list: &mut DisplayList) -> f32 {
@@ -755,6 +767,10 @@ impl LayoutEngine {
             LineHeight::Number(n) => style.font_size * n,
             LineHeight::Length(h) => h,
         };
+        
+        // Real browsers: Apply margins for inline elements
+        let inline_x = x + style.margin.left;
+        let inline_y = y + style.margin.top;
         
         // Handle img tags in inline context
         if let crate::dom::NodeType::Element { tag_name, .. } = node.node.node_type() {
@@ -769,18 +785,19 @@ impl LayoutEngine {
                     .and_then(|h| h.parse::<f32>().ok())
                     .unwrap_or(200.0);
                 
-                log::info!(target: "layout", "Found inline img element: src='{}', alt='{}', size={}x{} at ({}, {})", 
-                    img_url, alt_text, img_width, img_height, x, y);
+                log::info!(target: "layout", "Found inline img element: src='{}', alt='{}', size={}x{} at ({}, {}) -> ({}, {})", 
+                    img_url, alt_text, img_width, img_height, x, y, inline_x, inline_y);
                 
                 display_list.add_item(DisplayItem::Image {
                     url: img_url,
-                    x,
-                    y,
+                    x: inline_x,
+                    y: inline_y,
                     width: img_width,
                     height: img_height,
                     alt: alt_text,
                 });
-                return img_height;
+                // Return total height including margins
+                return img_height + style.margin.top + style.margin.bottom;
             }
         }
         
@@ -848,13 +865,9 @@ impl LayoutEngine {
                 }
                 
                 // Layout children inline with proper spacing
-                // Calculate proper starting x position: if x < padding, use padding, else use x
-                let padding = 20.0;
-                let start_x = if x < padding {
-                    padding
-                } else {
-                    x
-                };
+                // Real browsers: Use computed padding and margin
+                let left_padding = if x < 20.0 { 20.0 } else { style.padding.left };
+                let start_x = inline_x + left_padding;
                 let mut current_x = start_x;
                 let char_width = style.font_size * 0.6; // Approximate character width based on font size
                 let line_height = match style.line_height {
@@ -877,7 +890,7 @@ impl LayoutEngine {
                                     display_list.add_item(DisplayItem::Text {
                                         content: decoded.clone(),
                                         x: current_x,
-                                        y,
+                                        y: inline_y, // Use inline_y which includes margin
                                         color: Color { r: 0, g: 0, b: 0, a: 255 },
                                     });
                                     current_x += decoded.len() as f32 * char_width;
